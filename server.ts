@@ -62,7 +62,7 @@ function getResend(): Resend | null {
   return resendClient;
 }
 
-// Ethereal transporter (always works for testing, shows preview URL)
+// Ethereal transporter – always works, shows preview URL
 let etherealTransporter: nodemailer.Transporter | null = null;
 async function getEtherealTransporter() {
   if (!etherealTransporter) {
@@ -98,7 +98,7 @@ const upload = multer({
   },
 });
 
-// ============ EMAIL: Gmail -> Resend -> Ethereal (always works) ============
+// ============ EMAIL: Gmail → Resend → Ethereal (always works) ============
 const gmailTransporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 465,
