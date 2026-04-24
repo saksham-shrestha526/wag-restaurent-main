@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Filter, Plus, Minus, ShoppingCart, Info, RefreshCw } from 'lucide-react';
+import { Search, ShoppingCart, Info, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -49,11 +49,9 @@ const MenuPage = () => {
   const currency = settings?.currency || 'USD';
   const symbol = currencySymbols[currency] || '$';
 
-  // Fetch menu with proper error handling
   useEffect(() => {
     setLoading(true);
     setError(null);
-    
     fetch('/api/menu')
       .then(res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
@@ -71,7 +69,6 @@ const MenuPage = () => {
       .finally(() => setLoading(false));
   }, []);
 
-  // Filter menu based on search and category
   useEffect(() => {
     let result = menu;
     if (search) {
@@ -104,7 +101,6 @@ const MenuPage = () => {
     return badges;
   };
 
-  // Loading state
   if (loading) {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -121,7 +117,6 @@ const MenuPage = () => {
     );
   }
 
-  // Error state
   if (error) {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20 text-center">
@@ -136,7 +131,6 @@ const MenuPage = () => {
     );
   }
 
-  // Empty state (no items)
   if (menu.length === 0) {
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20 text-center">
@@ -235,9 +229,15 @@ const MenuPage = () => {
                     >
                       <ShoppingCart className="mr-2 h-4 w-4" /> Add to Cart
                     </Button>
+                    
+                    {/* Fixed DialogTrigger – no nested button */}
                     <Dialog>
                       <DialogTrigger asChild>
-                        <Button variant="outline" size="icon" className="border-white/10"><Info className="h-4 w-4" /></Button>
+                        <div className="cursor-pointer">
+                          <Button variant="outline" size="icon" className="border-white/10 pointer-events-none">
+                            <Info className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </DialogTrigger>
                       <DialogContent className="glass border-white/10 max-w-2xl">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

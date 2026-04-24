@@ -14,12 +14,12 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:3010',   // ← changed from 3002 to 3003
+        target: 'http://localhost:3011',
         changeOrigin: true,
         secure: false,
       },
       '/uploads': {
-        target: 'http://localhost:3010',   // ← changed from 3002 to 3003
+        target: 'http://localhost:3011',
         changeOrigin: true,
         secure: false,
         proxyTimeout: 120000,

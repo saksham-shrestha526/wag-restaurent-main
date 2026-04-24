@@ -1,5 +1,5 @@
 // src/lib/api.ts
-// Use RELATIVE URLs – rely on Vite proxy (port 3010)
+// Use RELATIVE URLs – rely on Vite proxy (backend runs on port 3010)
 const API_BASE_URL = '';
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {

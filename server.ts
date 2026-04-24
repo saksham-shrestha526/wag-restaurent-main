@@ -16,8 +16,6 @@ dotenv.config();
 
 import db, { DATA_DIR } from './src/lib/db';
 
-// ============ NO EXTRA SEEDING – all seeding is inside db.ts ============
-
 console.log('🔑 Env – GROQ:', !!process.env.GROQ_API_KEY, 'Resend:', !!process.env.RESEND_API_KEY);
 console.log('📁 DATA_DIR:', DATA_DIR);
 
@@ -83,7 +81,6 @@ const upload = multer({
   },
 });
 
-// ============ EMAIL: RESEND + GMAIL FALLBACK ============
 const gmailTransporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 587,
@@ -148,6 +145,7 @@ setInterval(() => {
 
 const ALLOWED_ORIGINS = [
   'http://localhost:5173',
+  'http://localhost:5174',
   'http://localhost:3001',
   process.env.FRONTEND_URL,
   process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : undefined,
@@ -156,7 +154,6 @@ const ALLOWED_ORIGINS = [
 async function startServer() {
   console.log('🚀 Starting WAG server...');
   const app = express();
-  // ✅ FIXED: Port changed from 3005 to 3010 to match Vite proxy
   const PORT = parseInt(process.env.PORT || '3010', 10);
   const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
@@ -309,7 +306,7 @@ async function startServer() {
       }
     }
 
-    const hashedPassword = bcrypt.hashSync(password, 10);
+    const hashedPassword = bcrypt.hashSync(password, 8); // ⚡ 8 rounds (faster)
     const phoneDigits = phone.replace(/\D/g, '').slice(-4);
     const randomPart = Math.floor(1000 + Math.random() * 9000);
     const namePrefix = name.replace(/\s+/g, '').substring(0, 3).toUpperCase();
@@ -326,7 +323,6 @@ async function startServer() {
     const code = generateOTP();
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
     db.prepare('INSERT INTO email_verifications (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
-
     sendMailAsync(
       email,
       'Verify your email - WAG Luxury Dining',
@@ -339,7 +335,6 @@ async function startServer() {
         </div>
       `
     ).catch(console.error);
-
     res.json({ success: true, message: 'Verification code sent to your email.', email });
   });
 
@@ -348,18 +343,15 @@ async function startServer() {
     if (!email) return res.status(400).json({ success: false, message: 'Email required.' });
     const user = db.prepare('SELECT id FROM users WHERE email = ? AND is_verified = 0').get(email) as any;
     if (!user) return res.status(404).json({ success: false, message: 'No unverified account found.' });
-
     db.prepare('DELETE FROM email_verifications WHERE email = ?').run(email);
     const code = generateOTP();
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
     db.prepare('INSERT INTO email_verifications (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
-
     sendMailAsync(
       email,
       'New Verification Code - WAG Luxury Dining',
       `<div style="font-family:sans-serif;"><h2>New Code</h2><p>Your new verification code is: <strong>${code}</strong></p><p>Expires in 2 minutes.</p></div>`
     ).catch(console.error);
-
     res.json({ success: true, message: 'New code sent.' });
   });
 
@@ -434,7 +426,7 @@ async function startServer() {
     if (!password || password.length < 8) {
       return res.status(400).json({ success: false, message: 'Password must be at least 8 characters.' });
     }
-    const hashedPassword = bcrypt.hashSync(password, 10);
+    const hashedPassword = bcrypt.hashSync(password, 8); // ⚡ 8 rounds
     db.prepare('UPDATE users SET password = ? WHERE email = ?').run(hashedPassword, email);
     db.prepare('DELETE FROM password_resets WHERE email = ?').run(email);
     res.json({ success: true, message: 'Password updated successfully.' });
@@ -1071,9 +1063,7 @@ async function startServer() {
     try {
       db.prepare('DELETE FROM menu_items').run();
       const insert = db.prepare(`INSERT INTO menu_items (name, description, price, category, is_veg, is_spicy, image_url, is_available) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`);
-      for (const item of items) {
-        insert.run(...item);
-      }
+      for (const item of items) insert.run(...item);
       res.json({ success: true, message: 'Menu seeded with 16 Nepali items' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1089,7 +1079,6 @@ async function startServer() {
       const revenue = (db.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total FROM orders WHERE payment_status = 'paid'`).get() as any)?.total || 0;
       const unreadMessages = (db.prepare('SELECT COUNT(*) as count FROM messages WHERE is_read = 0').get() as any)?.count || 0;
       const unreadReservations = (db.prepare('SELECT COUNT(*) as count FROM reservations WHERE is_read = 0').get() as any)?.count || 0;
-      // ✅ FIXED: Use 'menuItems' instead of 'menu' for frontend compatibility
       res.json({ users: userCount, orders: orderCount, reservations: reservationCount, menuItems: menuCount, revenue, unreadMessages, unreadReservations });
     } catch (err: any) {
       console.error('Stats error:', err);

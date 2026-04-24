@@ -3,21 +3,13 @@ import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
 
-// ============ PERSISTENT VOLUME SUPPORT ============
-const DATA_DIR =
-  process.env.DATA_DIR ||
-  (process.env.NODE_ENV === 'production' ? '/app/data' : path.join(process.cwd(), 'data'));
+const DATA_DIR = process.env.DATA_DIR || (process.env.NODE_ENV === 'production' ? '/app/data' : path.join(process.cwd(), 'data'));
 
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  console.log(`📁 Created data directory: ${DATA_DIR}`);
-}
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'restaurant.db');
 const dbDir = path.dirname(DB_PATH);
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
+if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 
 console.log(`🗄️  Database path: ${DB_PATH}`);
 const db = new Database(DB_PATH);
@@ -30,7 +22,7 @@ db.exec(`
   PRAGMA temp_store = MEMORY;
 `);
 
-// ============ SCHEMA ============
+// ============ SCHEMA (all tables) ============
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -241,7 +233,7 @@ const adminPassword = process.env.ADMIN_PASSWORD || 'otaku@2060';
 
 const adminExists = db.prepare('SELECT id, role FROM users WHERE email = ?').get(adminEmail) as any;
 if (!adminExists) {
-  const hashedPassword = bcrypt.hashSync(adminPassword, 10);
+  const hashedPassword = bcrypt.hashSync(adminPassword, 8);
   db.prepare(
     'INSERT INTO users (email, password, name, nickname, customer_id, role, is_verified) VALUES (?, ?, ?, ?, ?, ?, 1)'
   ).run(adminEmail, hashedPassword, 'Admin', 'Admin', 'WAG-ADM-001', 'admin');
@@ -251,29 +243,39 @@ if (!adminExists) {
   console.log('✅ Admin role restored');
 }
 
-// ============ SEED MENU ============
+// ============ SEED NEPALI MENU (16 ITEMS) ============
 const menuCount = db.prepare('SELECT COUNT(*) as count FROM menu_items').get() as { count: number };
 if (menuCount.count === 0) {
-  const seedMenu = [
-    { name: 'Golden Truffle Pasta', description: 'Handmade tagliatelle with black truffle and 24k gold leaf.', price: 45.00, category: 'Main Course', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/pasta/400/300' },
-    { name: 'Saffron Risotto', description: 'Creamy Arborio rice infused with premium saffron and parmesan.', price: 38.00, category: 'Main Course', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/risotto/400/300' },
-    { name: 'Wagyu Steak', description: 'A5 Grade Wagyu beef served with gold-dusted asparagus.', price: 120.00, category: 'Main Course', is_veg: 0, is_spicy: 0, image_url: 'https://picsum.photos/seed/steak/400/300' },
-    { name: 'Spicy Dragon Roll', description: 'Premium tuna with spicy mayo and gold flakes.', price: 28.00, category: 'Appetizer', is_veg: 0, is_spicy: 1, image_url: 'https://picsum.photos/seed/sushi/400/300' },
-    { name: 'Gold Leaf Chocolate Dome', description: 'Dark chocolate dome with gold leaf and raspberry coulis.', price: 18.00, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/dessert/400/300' },
-    { name: 'Tiramisu Royale', description: 'Classic tiramisu with gold-dusted espresso beans.', price: 15.00, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/tiramisu/400/300' },
-    { name: 'Golden Martini', description: 'Premium vodka with edible gold flakes and a twist of lemon.', price: 22.00, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/cocktail/400/300' },
-    { name: 'Vintage Reserve Wine', description: 'A glass of our finest vintage red wine.', price: 25.00, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/wine/400/300' },
+  const nepaliMenu = [
+    // APPETIZER
+    { name: 'Chicken Momo', description: 'Steamed dumplings with spicy sauce', price: 180, category: 'Appetizer', is_veg: 0, is_spicy: 1, image_url: 'https://picsum.photos/seed/momo/400/300' },
+    { name: 'Buff Momo', description: 'Juicy buff dumplings with achar', price: 200, category: 'Appetizer', is_veg: 0, is_spicy: 1, image_url: 'https://picsum.photos/seed/momo2/400/300' },
+    { name: 'Veg Momo', description: 'Soft vegetable dumplings', price: 150, category: 'Appetizer', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/vegmomo/400/300' },
+    { name: 'Chatpate', description: 'Spicy puffed rice snack', price: 100, category: 'Appetizer', is_veg: 1, is_spicy: 1, image_url: 'https://picsum.photos/seed/chatpate/400/300' },
+    // MAIN COURSE
+    { name: 'Dal Bhat Set', description: 'Rice, dal, vegetables and pickle', price: 350, category: 'Main Course', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/dalbhat/400/300' },
+    { name: 'Chicken Chowmein', description: 'Fried noodles with chicken', price: 220, category: 'Main Course', is_veg: 0, is_spicy: 0, image_url: 'https://picsum.photos/seed/chowmein/400/300' },
+    { name: 'Thakali Khana Set', description: 'Traditional Nepali thali', price: 450, category: 'Main Course', is_veg: 0, is_spicy: 0, image_url: 'https://picsum.photos/seed/thakali/400/300' },
+    { name: 'Buff Sukuti', description: 'Dry spicy buffalo meat', price: 480, category: 'Main Course', is_veg: 0, is_spicy: 1, image_url: 'https://picsum.photos/seed/sukuti/400/300' },
+    // DESSERT
+    { name: 'Juju Dhau', description: 'Sweet creamy yogurt', price: 150, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/juju/400/300' },
+    { name: 'Kheer', description: 'Rice pudding with milk', price: 120, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/kheer/400/300' },
+    { name: 'Sel Roti', description: 'Sweet rice bread', price: 180, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/selroti/400/300' },
+    { name: 'Ice Cream', description: 'Cold sweet dessert', price: 100, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/icecream/400/300' },
+    // DRINKS
+    { name: 'Masala Tea', description: 'Hot milk tea with spices', price: 50, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/tea/400/300' },
+    { name: 'Lassi', description: 'Sweet yogurt drink', price: 120, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/lassi/400/300' },
+    { name: 'Lemon Soda', description: 'Fresh lemon with soda', price: 100, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/soda/400/300' },
+    { name: 'Cold Drink', description: 'Chilled soft drink', price: 90, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/coke/400/300' }
   ];
-  const insertMenu = db.prepare(
-    'INSERT INTO menu_items (name, description, price, category, is_veg, is_spicy, image_url) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  );
-  const insertMany = db.transaction((items: typeof seedMenu) => {
+  const insertMenu = db.prepare(`INSERT INTO menu_items (name, description, price, category, is_veg, is_spicy, image_url, is_available) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`);
+  const insertMany = db.transaction((items: typeof nepaliMenu) => {
     for (const item of items) {
       insertMenu.run(item.name, item.description, item.price, item.category, item.is_veg, item.is_spicy, item.image_url);
     }
   });
-  insertMany(seedMenu);
-  console.log('✅ Menu items seeded');
+  insertMany(nepaliMenu);
+  console.log('✅ Nepali menu seeded (16 items)');
 }
 
 export { DATA_DIR, DB_PATH };

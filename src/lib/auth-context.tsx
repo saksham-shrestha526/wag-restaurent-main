@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 
 interface User {
   id: number;
@@ -26,14 +26,13 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const loginInProgress = useRef(false);
 
-  // Sync with backend session
   const checkAuth = useCallback(async (): Promise<boolean> => {
     try {
       const res = await fetch('/api/me', { credentials: 'include' });
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
-          // Session invalid – clear local user
           setUser(null);
           localStorage.removeItem('wag_authed_user');
           return false;
@@ -58,25 +57,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  // Initial session check
   useEffect(() => {
-    console.log('AuthProvider: Initializing session check...');
     checkAuth().finally(() => setLoading(false));
   }, [checkAuth]);
 
   const login = async (email: string, password: string) => {
-    const res = await fetch('/api/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || 'Login failed');
+    if (loginInProgress.current) return;
+    loginInProgress.current = true;
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Login failed');
+      }
+      setUser(data.user);
+      localStorage.setItem('wag_authed_user', JSON.stringify(data.user));
+    } finally {
+      loginInProgress.current = false;
     }
-    setUser(data.user);
-    localStorage.setItem('wag_authed_user', JSON.stringify(data.user));
   };
 
   const logout = async () => {
