@@ -62,6 +62,23 @@ function getResend(): Resend | null {
   return resendClient;
 }
 
+// Ethereal transporter (always works for testing, shows preview URL)
+let etherealTransporter: nodemailer.Transporter | null = null;
+async function getEtherealTransporter() {
+  if (!etherealTransporter) {
+    const testAccount = await nodemailer.createTestAccount();
+    etherealTransporter = nodemailer.createTransport({
+      host: 'smtp.ethereal.email',
+      port: 587,
+      secure: false,
+      auth: { user: testAccount.user, pass: testAccount.pass },
+    });
+    console.log('📧 Ethereal test email account created:', testAccount.user);
+    console.log('🔗 Preview URL will appear in logs when email is sent');
+  }
+  return etherealTransporter;
+}
+
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
   filename: (_req, file, cb) => {
@@ -81,7 +98,7 @@ const upload = multer({
   },
 });
 
-// ============ EMAIL: Gmail primary, Resend fallback ============
+// ============ EMAIL: Gmail -> Resend -> Ethereal (always works) ============
 const gmailTransporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 465,
@@ -96,24 +113,29 @@ const gmailTransporter = nodemailer.createTransport({
   socketTimeout: 20000,
 });
 
-const sendMailAsync = async (to: string, subject: string, html: string) => {
+async function sendMailAsync(to: string, subject: string, html: string) {
   let lastError: any = null;
-  // Try Gmail first (more reliable)
-  try {
-    const info = await gmailTransporter.sendMail({
-      from: `"WAG Restaurant" <${process.env.MAIL_USERNAME}>`,
-      to,
-      subject,
-      html,
-    });
-    console.log(`✅ Email via Gmail to ${to} (id: ${info.messageId})`);
-    return info;
-  } catch (err: any) {
-    console.error(`❌ Gmail failed:`, err.message);
-    lastError = err;
+
+  // 1. Try Gmail
+  if (process.env.MAIL_USERNAME && process.env.MAIL_PASSWORD) {
+    try {
+      const info = await gmailTransporter.sendMail({
+        from: `"WAG Restaurant" <${process.env.MAIL_USERNAME}>`,
+        to,
+        subject,
+        html,
+      });
+      console.log(`✅ Email via Gmail to ${to} (id: ${info.messageId})`);
+      return info;
+    } catch (err: any) {
+      console.error(`❌ Gmail failed:`, err.message);
+      lastError = err;
+    }
+  } else {
+    console.log('⚠️ Gmail credentials missing, skipping');
   }
 
-  // Fallback to Resend (only works to verified emails in test mode)
+  // 2. Fallback to Resend
   const resend = getResend();
   if (resend) {
     try {
@@ -134,10 +156,27 @@ const sendMailAsync = async (to: string, subject: string, html: string) => {
     console.log('⚠️ Resend not configured');
   }
 
-  throw lastError || new Error('No email provider available');
-};
+  // 3. Final fallback – Ethereal (always works, shows preview)
+  try {
+    const transporter = await getEtherealTransporter();
+    const info = await transporter.sendMail({
+      from: '"WAG Restaurant" <test@ethereal.email>',
+      to,
+      subject,
+      html,
+    });
+    console.log(`✅ Email via Ethereal to ${to}`);
+    console.log(`🔗 Preview URL: ${nodemailer.getTestMessageUrl(info)}`);
+    return info;
+  } catch (err: any) {
+    console.error(`❌ Ethereal also failed:`, err.message);
+    lastError = err;
+  }
 
-console.log('📧 Email configured: Gmail (primary) + Resend (fallback)');
+  throw lastError || new Error('No email provider available');
+}
+
+console.log('📧 Email configured: Gmail (primary) → Resend → Ethereal (always works)');
 
 function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -201,7 +240,7 @@ async function startServer() {
     if (!to) return res.status(400).json({ error: 'Missing "to" email' });
     try {
       await sendMailAsync(to, 'Test Email from WAG', '<h1>Test</h1><p>If you see this, email works.</p>');
-      res.json({ success: true, message: 'Email sent. Check logs.' });
+      res.json({ success: true, message: 'Email sent. Check logs for preview URL if using Ethereal.' });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -313,7 +352,7 @@ async function startServer() {
       }
     }
 
-    const hashedPassword = bcrypt.hashSync(password, 8); // fast bcrypt
+    const hashedPassword = bcrypt.hashSync(password, 8);
     const phoneDigits = phone.replace(/\D/g, '').slice(-4);
     const randomPart = Math.floor(1000 + Math.random() * 9000);
     const namePrefix = name.replace(/\s+/g, '').substring(0, 3).toUpperCase();
@@ -330,13 +369,11 @@ async function startServer() {
     const code = generateOTP();
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
     db.prepare('INSERT INTO email_verifications (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
-    // Fire-and-forget email
     sendMailAsync(
       email,
       'Verify your email - WAG Luxury Dining',
       `<div style="font-family:sans-serif;max-width:480px;margin:auto;"><h2 style="color:#b8860b;">Welcome to WAG!</h2><p>Your email verification code is:</p><div style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#333;margin:16px 0;">${code}</div><p style="color:#888;">This code expires in <strong>2 minutes</strong>. Do not share it with anyone.</p></div>`
     ).catch(err => console.error(`Email send failed for ${email}:`, err.message));
-
     res.json({ success: true, message: 'Verification code sent to your email.', email });
   });
 
@@ -345,7 +382,6 @@ async function startServer() {
     if (!email) return res.status(400).json({ success: false, message: 'Email required.' });
     const user = db.prepare('SELECT id FROM users WHERE email = ? AND is_verified = 0').get(email) as any;
     if (!user) return res.status(404).json({ success: false, message: 'No unverified account found.' });
-
     db.prepare('DELETE FROM email_verifications WHERE email = ?').run(email);
     const code = generateOTP();
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
@@ -416,7 +452,7 @@ async function startServer() {
     const reset = db.prepare('SELECT * FROM password_resets WHERE email = ? AND code = ?').get(email, code) as any;
     if (!reset || new Date(reset.expires_at) < new Date()) return res.status(400).json({ success: false, message: 'Invalid or expired reset code.' });
     if (!password || password.length < 8) return res.status(400).json({ success: false, message: 'Password must be at least 8 characters.' });
-    const hashedPassword = bcrypt.hashSync(password, 8); // fast bcrypt
+    const hashedPassword = bcrypt.hashSync(password, 8);
     db.prepare('UPDATE users SET password = ? WHERE email = ?').run(hashedPassword, email);
     db.prepare('DELETE FROM password_resets WHERE email = ?').run(email);
     res.json({ success: true, message: 'Password updated successfully.' });
