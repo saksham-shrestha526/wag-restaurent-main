@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head><title>Test API</title></head>
+<body>
+<h2>Testing Restaurant API</h2>
+<button onclick="testStats()">Test Admin Stats</button>
+<button onclick="testMessages()">Test Messages</button>
+<button onclick="testMenu()">Test Menu</button>
+<pre id="result"></pre>
+
+<script>
+async function testStats() {
+  try {
+    const res = await fetch('http://localhost:3001/api/admin/stats');
+    const data = await res.json();
+    document.getElementById('result').innerHTML = JSON.stringify(data, null, 2);
+  } catch(e) {
+    document.getElementById('result').innerHTML = 'Error: ' + e.message;
+  }
+}
+
+async function testMessages() {
+  try {
+    const res = await fetch('http://localhost:3001/api/messages');
+    const data = await res.json();
+    document.getElementById('result').innerHTML = JSON.stringify(data, null, 2);
+  } catch(e) {
+    document.getElementById('result').innerHTML = 'Error: ' + e.message;
+  }
+}
+
+async function testMenu() {
+  try {
+    const res = await fetch('http://localhost:3001/api/menu');
+    const data = await res.json();
+    document.getElementById('result').innerHTML = JSON.stringify(data, null, 2);
+  } catch(e) {
+    document.getElementById('result').innerHTML = 'Error: ' + e.message;
+  }
+}
+</script>
+</body>
+</html>
