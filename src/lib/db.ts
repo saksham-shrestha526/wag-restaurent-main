@@ -243,40 +243,42 @@ if (!adminExists) {
   console.log('✅ Admin role restored');
 }
 
-// ============ SEED NEPALI MENU (16 ITEMS) ============
-const menuCount = db.prepare('SELECT COUNT(*) as count FROM menu_items').get() as { count: number };
-if (menuCount.count === 0) {
-  const nepaliMenu = [
-    // APPETIZER
-    { name: 'Chicken Momo', description: 'Steamed dumplings with spicy sauce', price: 180, category: 'Appetizer', is_veg: 0, is_spicy: 1, image_url: 'https://picsum.photos/seed/momo/400/300' },
-    { name: 'Buff Momo', description: 'Juicy buff dumplings with achar', price: 200, category: 'Appetizer', is_veg: 0, is_spicy: 1, image_url: 'https://picsum.photos/seed/momo2/400/300' },
-    { name: 'Veg Momo', description: 'Soft vegetable dumplings', price: 150, category: 'Appetizer', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/vegmomo/400/300' },
-    { name: 'Chatpate', description: 'Spicy puffed rice snack', price: 100, category: 'Appetizer', is_veg: 1, is_spicy: 1, image_url: 'https://picsum.photos/seed/chatpate/400/300' },
-    // MAIN COURSE
-    { name: 'Dal Bhat Set', description: 'Rice, dal, vegetables and pickle', price: 350, category: 'Main Course', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/dalbhat/400/300' },
-    { name: 'Chicken Chowmein', description: 'Fried noodles with chicken', price: 220, category: 'Main Course', is_veg: 0, is_spicy: 0, image_url: 'https://picsum.photos/seed/chowmein/400/300' },
-    { name: 'Thakali Khana Set', description: 'Traditional Nepali thali', price: 450, category: 'Main Course', is_veg: 0, is_spicy: 0, image_url: 'https://picsum.photos/seed/thakali/400/300' },
-    { name: 'Buff Sukuti', description: 'Dry spicy buffalo meat', price: 480, category: 'Main Course', is_veg: 0, is_spicy: 1, image_url: 'https://picsum.photos/seed/sukuti/400/300' },
-    // DESSERT
-    { name: 'Juju Dhau', description: 'Sweet creamy yogurt', price: 150, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/juju/400/300' },
-    { name: 'Kheer', description: 'Rice pudding with milk', price: 120, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/kheer/400/300' },
-    { name: 'Sel Roti', description: 'Sweet rice bread', price: 180, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/selroti/400/300' },
-    { name: 'Ice Cream', description: 'Cold sweet dessert', price: 100, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/icecream/400/300' },
-    // DRINKS
-    { name: 'Masala Tea', description: 'Hot milk tea with spices', price: 50, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/tea/400/300' },
-    { name: 'Lassi', description: 'Sweet yogurt drink', price: 120, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/lassi/400/300' },
-    { name: 'Lemon Soda', description: 'Fresh lemon with soda', price: 100, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/soda/400/300' },
-    { name: 'Cold Drink', description: 'Chilled soft drink', price: 90, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/coke/400/300' }
-  ];
-  const insertMenu = db.prepare(`INSERT INTO menu_items (name, description, price, category, is_veg, is_spicy, image_url, is_available) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`);
-  const insertMany = db.transaction((items: typeof nepaliMenu) => {
-    for (const item of items) {
-      insertMenu.run(item.name, item.description, item.price, item.category, item.is_veg, item.is_spicy, item.image_url);
-    }
-  });
-  insertMany(nepaliMenu);
-  console.log('✅ Nepali menu seeded (16 items)');
-}
+// ============ SEED NEPALI MENU (16 ITEMS) – FORCED ON EVERY RESTART ============
+// This ensures the menu always contains the 16 Nepali dishes, even on Railway updates.
+console.log('🔄 Checking and updating menu to Nepali dishes...');
+const nepaliMenu = [
+  // APPETIZER
+  { name: 'Chicken Momo', description: 'Steamed dumplings with spicy sauce', price: 180, category: 'Appetizer', is_veg: 0, is_spicy: 1, image_url: 'https://picsum.photos/seed/momo/400/300' },
+  { name: 'Buff Momo', description: 'Juicy buff dumplings with achar', price: 200, category: 'Appetizer', is_veg: 0, is_spicy: 1, image_url: 'https://picsum.photos/seed/momo2/400/300' },
+  { name: 'Veg Momo', description: 'Soft vegetable dumplings', price: 150, category: 'Appetizer', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/vegmomo/400/300' },
+  { name: 'Chatpate', description: 'Spicy puffed rice snack', price: 100, category: 'Appetizer', is_veg: 1, is_spicy: 1, image_url: 'https://picsum.photos/seed/chatpate/400/300' },
+  // MAIN COURSE
+  { name: 'Dal Bhat Set', description: 'Rice, dal, vegetables and pickle', price: 350, category: 'Main Course', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/dalbhat/400/300' },
+  { name: 'Chicken Chowmein', description: 'Fried noodles with chicken', price: 220, category: 'Main Course', is_veg: 0, is_spicy: 0, image_url: 'https://picsum.photos/seed/chowmein/400/300' },
+  { name: 'Thakali Khana Set', description: 'Traditional Nepali thali', price: 450, category: 'Main Course', is_veg: 0, is_spicy: 0, image_url: 'https://picsum.photos/seed/thakali/400/300' },
+  { name: 'Buff Sukuti', description: 'Dry spicy buffalo meat', price: 480, category: 'Main Course', is_veg: 0, is_spicy: 1, image_url: 'https://picsum.photos/seed/sukuti/400/300' },
+  // DESSERT
+  { name: 'Juju Dhau', description: 'Sweet creamy yogurt', price: 150, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/juju/400/300' },
+  { name: 'Kheer', description: 'Rice pudding with milk', price: 120, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/kheer/400/300' },
+  { name: 'Sel Roti', description: 'Sweet rice bread', price: 180, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/selroti/400/300' },
+  { name: 'Ice Cream', description: 'Cold sweet dessert', price: 100, category: 'Dessert', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/icecream/400/300' },
+  // DRINKS
+  { name: 'Masala Tea', description: 'Hot milk tea with spices', price: 50, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/tea/400/300' },
+  { name: 'Lassi', description: 'Sweet yogurt drink', price: 120, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/lassi/400/300' },
+  { name: 'Lemon Soda', description: 'Fresh lemon with soda', price: 100, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/soda/400/300' },
+  { name: 'Cold Drink', description: 'Chilled soft drink', price: 90, category: 'Drinks', is_veg: 1, is_spicy: 0, image_url: 'https://picsum.photos/seed/coke/400/300' }
+];
+
+// Delete existing menu items and insert the Nepali menu
+db.prepare('DELETE FROM menu_items').run();
+const insertMenu = db.prepare(`INSERT INTO menu_items (name, description, price, category, is_veg, is_spicy, image_url, is_available) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`);
+const insertMany = db.transaction((items: typeof nepaliMenu) => {
+  for (const item of items) {
+    insertMenu.run(item.name, item.description, item.price, item.category, item.is_veg, item.is_spicy, item.image_url);
+  }
+});
+insertMany(nepaliMenu);
+console.log('✅ Nepali menu seeded (16 items) – forced on this restart');
 
 export { DATA_DIR, DB_PATH };
 export default db;
