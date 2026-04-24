@@ -81,21 +81,39 @@ const upload = multer({
   },
 });
 
+// ============ EMAIL: Gmail primary, Resend fallback ============
 const gmailTransporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 587,
-  secure: false,
+  port: 465,
+  secure: true,
   auth: {
     user: process.env.MAIL_USERNAME || '',
     pass: process.env.MAIL_PASSWORD || '',
   },
   family: 4,
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 15000,
+  connectionTimeout: 15000,
+  greetingTimeout: 15000,
+  socketTimeout: 20000,
 });
 
 const sendMailAsync = async (to: string, subject: string, html: string) => {
+  let lastError: any = null;
+  // Try Gmail first (more reliable)
+  try {
+    const info = await gmailTransporter.sendMail({
+      from: `"WAG Restaurant" <${process.env.MAIL_USERNAME}>`,
+      to,
+      subject,
+      html,
+    });
+    console.log(`✅ Email via Gmail to ${to} (id: ${info.messageId})`);
+    return info;
+  } catch (err: any) {
+    console.error(`❌ Gmail failed:`, err.message);
+    lastError = err;
+  }
+
+  // Fallback to Resend (only works to verified emails in test mode)
   const resend = getResend();
   if (resend) {
     try {
@@ -110,27 +128,16 @@ const sendMailAsync = async (to: string, subject: string, html: string) => {
       return data;
     } catch (err: any) {
       console.error(`❌ Resend failed:`, err.message);
+      lastError = err;
     }
   } else {
-    console.log('⚠️ Resend not configured, falling back to Gmail');
+    console.log('⚠️ Resend not configured');
   }
 
-  try {
-    const info = await gmailTransporter.sendMail({
-      from: `"WAG Restaurant" <${process.env.MAIL_USERNAME}>`,
-      to,
-      subject,
-      html,
-    });
-    console.log(`✅ Email via Gmail to ${to} (id: ${info.messageId})`);
-    return info;
-  } catch (err: any) {
-    console.error(`❌ Gmail failed:`, err.message);
-    throw err;
-  }
+  throw lastError || new Error('No email provider available');
 };
 
-console.log('📧 Email configured: Resend (primary) + Gmail (fallback)');
+console.log('📧 Email configured: Gmail (primary) + Resend (fallback)');
 
 function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -306,7 +313,7 @@ async function startServer() {
       }
     }
 
-    const hashedPassword = bcrypt.hashSync(password, 8); // ⚡ 8 rounds (faster)
+    const hashedPassword = bcrypt.hashSync(password, 8); // fast bcrypt
     const phoneDigits = phone.replace(/\D/g, '').slice(-4);
     const randomPart = Math.floor(1000 + Math.random() * 9000);
     const namePrefix = name.replace(/\s+/g, '').substring(0, 3).toUpperCase();
@@ -323,18 +330,13 @@ async function startServer() {
     const code = generateOTP();
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
     db.prepare('INSERT INTO email_verifications (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
+    // Fire-and-forget email
     sendMailAsync(
       email,
       'Verify your email - WAG Luxury Dining',
-      `
-        <div style="font-family:sans-serif;max-width:480px;margin:auto;">
-          <h2 style="color:#b8860b;">Welcome to WAG!</h2>
-          <p>Your email verification code is:</p>
-          <div style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#333;margin:16px 0;">${code}</div>
-          <p style="color:#888;">This code expires in <strong>2 minutes</strong>. Do not share it with anyone.</p>
-        </div>
-      `
-    ).catch(console.error);
+      `<div style="font-family:sans-serif;max-width:480px;margin:auto;"><h2 style="color:#b8860b;">Welcome to WAG!</h2><p>Your email verification code is:</p><div style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#333;margin:16px 0;">${code}</div><p style="color:#888;">This code expires in <strong>2 minutes</strong>. Do not share it with anyone.</p></div>`
+    ).catch(err => console.error(`Email send failed for ${email}:`, err.message));
+
     res.json({ success: true, message: 'Verification code sent to your email.', email });
   });
 
@@ -343,6 +345,7 @@ async function startServer() {
     if (!email) return res.status(400).json({ success: false, message: 'Email required.' });
     const user = db.prepare('SELECT id FROM users WHERE email = ? AND is_verified = 0').get(email) as any;
     if (!user) return res.status(404).json({ success: false, message: 'No unverified account found.' });
+
     db.prepare('DELETE FROM email_verifications WHERE email = ?').run(email);
     const code = generateOTP();
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
@@ -350,8 +353,8 @@ async function startServer() {
     sendMailAsync(
       email,
       'New Verification Code - WAG Luxury Dining',
-      `<div style="font-family:sans-serif;"><h2>New Code</h2><p>Your new verification code is: <strong>${code}</strong></p><p>Expires in 2 minutes.</p></div>`
-    ).catch(console.error);
+      `<div><h2>New Code</h2><p>Your new verification code is: <strong>${code}</strong></p><p>Expires in 2 minutes.</p></div>`
+    ).catch(err => console.error(`Resend email failed for ${email}:`, err.message));
     res.json({ success: true, message: 'New code sent.' });
   });
 
@@ -379,15 +382,8 @@ async function startServer() {
     sendMailAsync(
       email,
       'Password Reset Code - WAG Restaurant',
-      `
-        <div style="font-family:sans-serif;max-width:480px;margin:auto;">
-          <h2 style="color:#b8860b;">Password Reset</h2>
-          <p>Your reset code is:</p>
-          <div style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#333;margin:16px 0;">${code}</div>
-          <p style="color:#888;">This code expires in 10 minutes.</p>
-        </div>
-      `
-    ).catch(console.error);
+      `<div><h2>Password Reset</h2><p>Your reset code is: <strong>${code}</strong></p><p>Expires in 10 minutes.</p></div>`
+    ).catch(err => console.error(`Reset code email failed for ${email}:`, err.message));
     res.json({ success: true, message: 'Reset code sent to your email.' });
   });
 
@@ -403,7 +399,7 @@ async function startServer() {
       email,
       'New Password Reset Code - WAG',
       `<p>Your new code: <strong>${code}</strong> (expires in 10 min)</p>`
-    ).catch(console.error);
+    ).catch(err => console.error(`Resend reset email failed for ${email}:`, err.message));
     res.json({ success: true, message: 'New code sent.' });
   });
 
@@ -411,22 +407,16 @@ async function startServer() {
     const { email, code } = req.body;
     const reset = db.prepare('SELECT * FROM password_resets WHERE email = ? AND code = ?').get(email, code) as any;
     if (!reset) return res.status(400).json({ success: false, message: 'Invalid reset code.' });
-    if (new Date(reset.expires_at) < new Date()) {
-      return res.status(400).json({ success: false, message: 'Reset code has expired.' });
-    }
+    if (new Date(reset.expires_at) < new Date()) return res.status(400).json({ success: false, message: 'Reset code has expired.' });
     res.json({ success: true });
   });
 
   app.post('/api/reset-password', async (req, res) => {
     const { email, code, password } = req.body;
     const reset = db.prepare('SELECT * FROM password_resets WHERE email = ? AND code = ?').get(email, code) as any;
-    if (!reset || new Date(reset.expires_at) < new Date()) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired reset code.' });
-    }
-    if (!password || password.length < 8) {
-      return res.status(400).json({ success: false, message: 'Password must be at least 8 characters.' });
-    }
-    const hashedPassword = bcrypt.hashSync(password, 8); // ⚡ 8 rounds
+    if (!reset || new Date(reset.expires_at) < new Date()) return res.status(400).json({ success: false, message: 'Invalid or expired reset code.' });
+    if (!password || password.length < 8) return res.status(400).json({ success: false, message: 'Password must be at least 8 characters.' });
+    const hashedPassword = bcrypt.hashSync(password, 8); // fast bcrypt
     db.prepare('UPDATE users SET password = ? WHERE email = ?').run(hashedPassword, email);
     db.prepare('DELETE FROM password_resets WHERE email = ?').run(email);
     res.json({ success: true, message: 'Password updated successfully.' });
@@ -434,26 +424,15 @@ async function startServer() {
 
   app.post('/api/login', loginLimiter, (req, res) => {
     const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ success: false, message: 'Email and password are required.' });
-    }
+    if (!email || !password) return res.status(400).json({ success: false, message: 'Email and password are required.' });
     const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email) as any;
     if (!user) return res.status(401).json({ success: false, message: 'No account found with this email.' });
-    if (!user.is_verified) {
-      return res.status(401).json({ success: false, message: 'Please verify your email first. Check your inbox.' });
-    }
-    if (!bcrypt.compareSync(password, user.password)) {
-      return res.status(401).json({ success: false, message: 'Incorrect password.' });
-    }
-
+    if (!user.is_verified) return res.status(401).json({ success: false, message: 'Please verify your email first. Check your inbox.' });
+    if (!bcrypt.compareSync(password, user.password)) return res.status(401).json({ success: false, message: 'Incorrect password.' });
     (req as any).session.userId = user.id;
     (req as any).session.userRole = user.role;
-
     req.session.save((err) => {
-      if (err) {
-        console.error('Session save error:', err);
-        return res.status(500).json({ success: false, message: 'Session error. Please try again.' });
-      }
+      if (err) return res.status(500).json({ success: false, message: 'Session error. Please try again.' });
       res.json({
         success: true,
         user: {
@@ -558,21 +537,13 @@ async function startServer() {
     const userId = (req as any).session?.userId;
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
     try {
-      const orders = db
-        .prepare('SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC')
-        .all(userId) as any[];
+      const orders = db.prepare('SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC').all(userId) as any[];
       for (const order of orders) {
-        order.items = db
-          .prepare(
-            'SELECT mi.name, oi.quantity, oi.price FROM order_items oi JOIN menu_items mi ON oi.menu_item_id = mi.id WHERE oi.order_id = ?'
-          )
-          .all(order.id);
+        order.items = db.prepare('SELECT mi.name, oi.quantity, oi.price FROM order_items oi JOIN menu_items mi ON oi.menu_item_id = mi.id WHERE oi.order_id = ?').all(order.id);
       }
       const reservations = db.prepare('SELECT * FROM reservations WHERE user_id = ? ORDER BY created_at DESC').all(userId);
       const notifications = db.prepare('SELECT * FROM user_notifications WHERE user_id = ? ORDER BY created_at DESC').all(userId);
-      const paymentMethods = db
-        .prepare('SELECT * FROM user_payment_methods WHERE user_id = ? ORDER BY is_default DESC, created_at DESC')
-        .all(userId);
+      const paymentMethods = db.prepare('SELECT * FROM user_payment_methods WHERE user_id = ? ORDER BY is_default DESC, created_at DESC').all(userId);
       res.json({ success: true, orders, reservations, notifications, paymentMethods });
     } catch (err: any) {
       console.error('Account details error:', err);
@@ -599,20 +570,14 @@ async function startServer() {
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
     const order = db.prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?').get(req.params.id, userId) as any;
     if (!order) return res.status(404).json({ message: 'Order not found' });
-    order.items = db
-      .prepare(
-        'SELECT mi.name, oi.quantity, oi.price FROM order_items oi JOIN menu_items mi ON oi.menu_item_id = mi.id WHERE oi.order_id = ?'
-      )
-      .all(order.id);
+    order.items = db.prepare('SELECT mi.name, oi.quantity, oi.price FROM order_items oi JOIN menu_items mi ON oi.menu_item_id = mi.id WHERE oi.order_id = ?').all(order.id);
     res.json(order);
   });
 
   app.get('/api/user/reservations', (req, res) => {
     const userId = (req as any).session?.userId;
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
-    const reservations = db
-      .prepare('SELECT * FROM reservations WHERE user_id = ? ORDER BY date DESC, time DESC')
-      .all(userId);
+    const reservations = db.prepare('SELECT * FROM reservations WHERE user_id = ? ORDER BY date DESC, time DESC').all(userId);
     res.json(reservations);
   });
 
@@ -628,9 +593,7 @@ async function startServer() {
         'info'
       );
     }
-    const notifications = db
-      .prepare('SELECT * FROM user_notifications WHERE user_id = ? ORDER BY created_at DESC')
-      .all(userId);
+    const notifications = db.prepare('SELECT * FROM user_notifications WHERE user_id = ? ORDER BY created_at DESC').all(userId);
     res.json(notifications);
   });
 
@@ -682,9 +645,7 @@ async function startServer() {
   app.get('/api/user/payment-methods', (req, res) => {
     const userId = (req as any).session?.userId;
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
-    const methods = db
-      .prepare('SELECT * FROM user_payment_methods WHERE user_id = ? ORDER BY is_default DESC, created_at DESC')
-      .all(userId);
+    const methods = db.prepare('SELECT * FROM user_payment_methods WHERE user_id = ? ORDER BY is_default DESC, created_at DESC').all(userId);
     res.json(methods);
   });
 
@@ -693,9 +654,7 @@ async function startServer() {
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
     const { type, provider, last4, expiry, is_default } = req.body;
     if (is_default) db.prepare('UPDATE user_payment_methods SET is_default = 0 WHERE user_id = ?').run(userId);
-    const result = db
-      .prepare('INSERT INTO user_payment_methods (user_id, type, provider, last4, expiry, is_default) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(userId, type, provider, last4, expiry, is_default ? 1 : 0);
+    const result = db.prepare('INSERT INTO user_payment_methods (user_id, type, provider, last4, expiry, is_default) VALUES (?, ?, ?, ?, ?, ?)').run(userId, type, provider, last4, expiry, is_default ? 1 : 0);
     res.json({ success: true, id: result.lastInsertRowid });
   });
 
@@ -723,9 +682,7 @@ async function startServer() {
     const userId = (req as any).session?.userId;
     if (!userId) return res.status(401).json({ success: false, message: 'Please log in to place an order.' });
     const { items, subtotal = 0, tax = 0, service_charge = 0, total_amount, payment_method, shipping_info } = req.body;
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ success: false, message: 'No items in order.' });
-    }
+    if (!items || !Array.isArray(items) || items.length === 0) return res.status(400).json({ success: false, message: 'No items in order.' });
     try {
       const pointsEarned = Math.floor(total_amount || 0);
       const orderNumber = `WAG-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`;
@@ -741,29 +698,16 @@ async function startServer() {
         );
       const orderId = info.lastInsertRowid as number;
       const insertItem = db.prepare('INSERT INTO order_items (order_id, menu_item_id, quantity, price) VALUES (?, ?, ?, ?)');
-      for (const item of items) {
-        insertItem.run(orderId, item.id, item.quantity, item.price);
-      }
+      for (const item of items) insertItem.run(orderId, item.id, item.quantity, item.price);
       db.prepare('UPDATE users SET loyalty_points = loyalty_points + ? WHERE id = ?').run(pointsEarned, userId);
-      db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(
-        userId, 'Order Placed', `Your order ${orderNumber} has been received.`, 'success'
-      );
-
+      db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(userId, 'Order Placed', `Your order ${orderNumber} has been received.`, 'success');
       const adminUser = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as any;
-      if (adminUser) {
-        db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(
-          adminUser.id,
-          '🛒 New Order',
-          `Order #${orderNumber} placed by ${shipping_info?.name || 'Guest'}`,
-          'order'
-        );
-      }
+      if (adminUser) db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(adminUser.id, '🛒 New Order', `Order #${orderNumber} placed by ${shipping_info?.name || 'Guest'}`, 'order');
       sendMailAsync(
         process.env.ADMIN_EMAIL || process.env.MAIL_USERNAME || '',
         `🛒 New Order: ${orderNumber}`,
         `<h3>New Order #${orderNumber}</h3><p>Total: $${total_amount}</p><p><a href="${process.env.VITE_API_URL || 'https://your-domain.com'}/admin">View in Admin</a></p>`
-      ).catch(console.error);
-
+      ).catch(err => console.error(`Admin order email failed:`, err.message));
       if (payment_method === 'card') {
         const stripe = getStripe();
         if (!stripe) return res.status(500).json({ success: false, message: 'Payment gateway not configured.' });
@@ -778,12 +722,8 @@ async function startServer() {
             quantity: item.quantity,
           };
         });
-        if (tax > 0) {
-          lineItems.push({ price_data: { currency: 'usd', product_data: { name: 'Tax (13%)' }, unit_amount: Math.round(tax * 100) }, quantity: 1 });
-        }
-        if (service_charge > 0) {
-          lineItems.push({ price_data: { currency: 'usd', product_data: { name: 'Service Charge (10%)' }, unit_amount: Math.round(service_charge * 100) }, quantity: 1 });
-        }
+        if (tax > 0) lineItems.push({ price_data: { currency: 'usd', product_data: { name: 'Tax (13%)' }, unit_amount: Math.round(tax * 100) }, quantity: 1 });
+        if (service_charge > 0) lineItems.push({ price_data: { currency: 'usd', product_data: { name: 'Service Charge (10%)' }, unit_amount: Math.round(service_charge * 100) }, quantity: 1 });
         const checkoutSession = await stripe.checkout.sessions.create({
           payment_method_types: ['card'],
           line_items: lineItems,
@@ -848,41 +788,18 @@ async function startServer() {
   // ============ RESERVATIONS ============
   app.post('/api/reservations', async (req, res) => {
     const { name, email, phone, date, time, guests, notes } = req.body;
-    if (!name || !email || !phone || !date || !time || !guests) {
-      return res.status(400).json({ success: false, message: 'All fields are required.' });
-    }
+    if (!name || !email || !phone || !date || !time || !guests) return res.status(400).json({ success: false, message: 'All fields are required.' });
     const userId = (req as any).session?.userId || null;
     try {
-      const result = db.prepare(
-        'INSERT INTO reservations (user_id, name, email, phone, date, time, guests, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-      ).run(userId, name, email, phone, date, time, guests, notes || '');
+      const result = db.prepare('INSERT INTO reservations (user_id, name, email, phone, date, time, guests, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(userId, name, email, phone, date, time, guests, notes || '');
       const reservationId = result.lastInsertRowid;
-
-      await sendMailAsync(
-        email,
-        'Reservation Confirmed - WAG Restaurant',
-        `<h2>Reservation Confirmed!</h2><p>Dear ${name}, your reservation on <strong>${date}</strong> at <strong>${time}</strong> for <strong>${guests} guests</strong> is confirmed.</p>`
-      ).catch(console.error);
-
+      sendMailAsync(email, 'Reservation Confirmed - WAG Restaurant', `<h2>Reservation Confirmed!</h2><p>Dear ${name}, your reservation on <strong>${date}</strong> at <strong>${time}</strong> for <strong>${guests} guests</strong> is confirmed.</p>`)
+        .catch(err => console.error(`Reservation email failed for ${email}:`, err.message));
       const adminEmail = process.env.ADMIN_EMAIL || process.env.MAIL_USERNAME || '';
-      if (adminEmail && adminEmail !== email) {
-        await sendMailAsync(
-          adminEmail,
-          `🆕 New Reservation: ${name}`,
-          `<h3>New Reservation</h3><p>Name: ${name}<br>Email: ${email}<br>Phone: ${phone}<br>Date: ${date}<br>Time: ${time}<br>Guests: ${guests}<br>Notes: ${notes || 'None'}</p><p><a href="${process.env.VITE_API_URL || 'https://your-domain.com'}/admin">Go to Admin Dashboard</a></p>`
-        ).catch(console.error);
-      }
-
+      if (adminEmail && adminEmail !== email) sendMailAsync(adminEmail, `🆕 New Reservation: ${name}`, `<h3>New Reservation</h3><p>Name: ${name}<br>Email: ${email}<br>Phone: ${phone}<br>Date: ${date}<br>Time: ${time}<br>Guests: ${guests}<br>Notes: ${notes || 'None'}</p><p><a href="${process.env.VITE_API_URL || 'https://your-domain.com'}/admin">Go to Admin Dashboard</a></p>`).catch(console.error);
       const adminUser = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as any;
-      if (adminUser) {
-        db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(
-          adminUser.id,
-          '📅 New Reservation',
-          `${name} booked a table for ${guests} on ${date} at ${time}`,
-          'reservation'
-        );
-      }
-
+      if (adminUser) db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(adminUser.id, '📅 New Reservation', `${name} booked a table for ${guests} on ${date} at ${time}`, 'reservation');
       res.json({ success: true, message: 'Reservation confirmed!', id: reservationId });
     } catch (err: any) {
       console.error('Reservation Error:', err);
@@ -912,33 +829,13 @@ async function startServer() {
   // ============ CONTACT FORM ============
   app.post('/api/contact', async (req, res) => {
     const { name, email, subject, message } = req.body;
-    if (!name || !email || !message) {
-      return res.status(400).json({ success: false, message: 'Name, email, and message are required.' });
-    }
+    if (!name || !email || !message) return res.status(400).json({ success: false, message: 'Name, email, and message are required.' });
     try {
-      db.prepare(
-        `INSERT INTO messages (name, email, subject, message, is_read, created_at) VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP)`
-      ).run(name, email, subject || 'No subject', message);
-
+      db.prepare(`INSERT INTO messages (name, email, subject, message, is_read, created_at) VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP)`).run(name, email, subject || 'No subject', message);
       const adminEmail = process.env.ADMIN_EMAIL || process.env.MAIL_USERNAME || '';
-      if (adminEmail) {
-        await sendMailAsync(
-          adminEmail,
-          `[Contact] ${subject || 'New Message'} - from ${name}`,
-          `<h2>Contact Form</h2><p><strong>From:</strong> ${name} (${email})</p><p><strong>Subject:</strong> ${subject}</p><p><strong>Message:</strong></p><p>${message}</p>`
-        ).catch(console.error);
-      }
-
+      if (adminEmail) sendMailAsync(adminEmail, `[Contact] ${subject || 'New Message'} - from ${name}`, `<h2>Contact Form</h2><p><strong>From:</strong> ${name} (${email})</p><p><strong>Subject:</strong> ${subject}</p><p><strong>Message:</strong></p><p>${message}</p>`).catch(console.error);
       const adminUser = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as any;
-      if (adminUser) {
-        db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(
-          adminUser.id,
-          '💬 New Contact Message',
-          `${name} sent a message: "${message.substring(0, 50)}..."`,
-          'message'
-        );
-      }
-
+      if (adminUser) db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(adminUser.id, '💬 New Contact Message', `${name} sent a message: "${message.substring(0, 50)}..."`, 'message');
       res.json({ success: true, message: 'Message sent successfully!' });
     } catch (err: any) {
       console.error('Contact error:', err);
@@ -946,17 +843,12 @@ async function startServer() {
     }
   });
 
-  app.post('/api/send-message', (req, res, next) => {
-    req.url = '/api/contact';
-    next('route');
-  });
-
+  app.post('/api/send-message', (req, res, next) => { req.url = '/api/contact'; next('route'); });
   app.get('/api/messages', (req, res) => {
     if ((req as any).session?.userRole !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
     const messages = db.prepare('SELECT * FROM messages ORDER BY created_at DESC').all();
     res.json(messages);
   });
-
   app.patch('/api/messages/:id/read', (req, res) => {
     if ((req as any).session?.userRole !== 'admin') return res.status(403).json({ message: 'Unauthorized' });
     db.prepare('UPDATE messages SET is_read = 1 WHERE id = ?').run(req.params.id);
@@ -967,9 +859,7 @@ async function startServer() {
   app.post('/api/concierge', async (req, res) => {
     const { messages, userName = 'Guest' } = req.body;
     const groqApiKey = process.env.GROQ_API_KEY;
-    const lastUserMessage = Array.isArray(messages)
-      ? messages.filter((m: any) => m.role === 'user').pop()?.content || ''
-      : '';
+    const lastUserMessage = Array.isArray(messages) ? messages.filter((m: any) => m.role === 'user').pop()?.content || '' : '';
     if (!groqApiKey) {
       const msg = lastUserMessage.toLowerCase();
       let reply = "Welcome to WAG! How can I assist you today?";
@@ -985,10 +875,7 @@ async function startServer() {
         body: JSON.stringify({
           model: 'llama-3.3-70b-versatile',
           messages: [
-            {
-              role: 'system',
-              content: `You are a helpful AI concierge for WAG Luxury Dining restaurant in Kathmandu, Nepal. Help guests with menu questions, reservations, hours (5 PM–11 PM daily), and general inquiries. Be warm and professional. Keep answers concise.`,
-            },
+            { role: 'system', content: 'You are a helpful AI concierge for WAG Luxury Dining restaurant in Kathmandu, Nepal. Help guests with menu questions, reservations, hours (5 PM–11 PM daily), and general inquiries. Be warm and professional. Keep answers concise.' },
             { role: 'user', content: lastUserMessage },
           ],
           temperature: 0.7,
@@ -1026,18 +913,14 @@ async function startServer() {
       db.prepare('INSERT INTO newsletter (email) VALUES (?)').run(email);
       res.json({ success: true, message: 'Subscribed successfully!' });
     } catch (err: any) {
-      if (err.message?.includes('UNIQUE')) {
-        return res.status(400).json({ success: false, message: 'Already subscribed.' });
-      }
+      if (err.message?.includes('UNIQUE')) return res.status(400).json({ success: false, message: 'Already subscribed.' });
       res.status(500).json({ success: false, message: 'Failed to subscribe.' });
     }
   });
 
   // ============ ADMIN ROUTES ============
   function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
-    if ((req as any).session?.userRole !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Admin access required.' });
-    }
+    if ((req as any).session?.userRole !== 'admin') return res.status(403).json({ success: false, message: 'Admin access required.' });
     next();
   }
 
@@ -1077,10 +960,8 @@ async function startServer() {
       const reservationCount = (db.prepare('SELECT COUNT(*) as count FROM reservations').get() as any)?.count || 0;
       const menuCount = (db.prepare('SELECT COUNT(*) as count FROM menu_items').get() as any)?.count || 0;
       const revenue = (db.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total FROM orders WHERE payment_status = 'paid'`).get() as any)?.total || 0;
-      const unreadMessages = (db.prepare('SELECT COUNT(*) as count FROM messages WHERE is_read = 0').get() as any)?.count || 0;
-      const unreadReservations = (db.prepare('SELECT COUNT(*) as count FROM reservations WHERE is_read = 0').get() as any)?.count || 0;
-      res.json({ users: userCount, orders: orderCount, reservations: reservationCount, menuItems: menuCount, revenue, unreadMessages, unreadReservations });
-    } catch (err: any) {
+      res.json({ users: userCount, orders: orderCount, reservations: reservationCount, menuItems: menuCount, revenue });
+    } catch (err) {
       console.error('Stats error:', err);
       res.status(500).json({ message: 'Failed to fetch stats.' });
     }
@@ -1095,15 +976,9 @@ async function startServer() {
            ORDER BY o.created_at DESC`
         )
         .all() as any[];
-      for (const order of orders) {
-        order.items = db
-          .prepare(
-            `SELECT mi.name, oi.quantity, oi.price
-             FROM order_items oi JOIN menu_items mi ON oi.menu_item_id = mi.id
-             WHERE oi.order_id = ?`
-          )
-          .all(order.id);
-      }
+      for (const order of orders) order.items = db
+        .prepare('SELECT mi.name, oi.quantity, oi.price FROM order_items oi JOIN menu_items mi ON oi.menu_item_id = mi.id WHERE oi.order_id = ?')
+        .all(order.id);
       res.json(orders);
     } catch (err) {
       console.error('Admin orders error:', err);
@@ -1161,9 +1036,8 @@ async function startServer() {
         for (let i = 0; i < 3; i++) {
           const orderNumber = `WAG-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`;
           const total = 50 + i * 20;
-          const orderId = db.prepare(`INSERT INTO orders (order_number, user_id, subtotal, tax, service_charge, total_amount, status, payment_status) VALUES (?, ?, ?, ?, ?, ?, 'completed', 'paid')`).run(
-            orderNumber, user.id, total - 10, total * 0.13, total * 0.1, total
-          ).lastInsertRowid;
+          const orderId = db.prepare(`INSERT INTO orders (order_number, user_id, subtotal, tax, service_charge, total_amount, status, payment_status) VALUES (?, ?, ?, ?, ?, ?, 'completed', 'paid')`)
+            .run(orderNumber, user.id, total - 10, total * 0.13, total * 0.1, total).lastInsertRowid;
           const menuItems = db.prepare('SELECT id, price FROM menu_items LIMIT 2').all() as any[];
           for (let j = 0; j < menuItems.length; j++) {
             db.prepare('INSERT INTO order_items (order_id, menu_item_id, quantity, price) VALUES (?, ?, ?, ?)').run(orderId, menuItems[j].id, 1, menuItems[j].price);
@@ -1194,9 +1068,7 @@ async function startServer() {
     try {
       const upsert = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
       const insertMany = db.transaction((entries: [string, string][]) => {
-        for (const [key, value] of entries) {
-          if (key && value !== undefined) upsert.run(key, String(value));
-        }
+        for (const [key, value] of entries) if (key && value !== undefined) upsert.run(key, String(value));
       });
       insertMany(Object.entries(settings) as [string, string][]);
       res.json({ success: true, message: 'Settings saved.' });
@@ -1223,9 +1095,7 @@ async function startServer() {
     if (fs.existsSync(distPath)) {
       app.use(express.static(distPath, { maxAge: '1d' }));
       app.get('*', (req, res) => {
-        if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/')) {
-          return res.status(404).json({ message: 'Not found' });
-        }
+        if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/')) return res.status(404).json({ message: 'Not found' });
         res.sendFile(path.join(distPath, 'index.html'));
       });
     } else {
@@ -1234,10 +1104,7 @@ async function startServer() {
   } else {
     console.log('🔧 Starting Vite development server...');
     const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
     app.use(vite.middlewares);
   }
 
@@ -1247,12 +1114,10 @@ async function startServer() {
   });
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log('========================================');
     console.log(`✅ Server running on http://0.0.0.0:${PORT}`);
     console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`📊 Health: http://localhost:${PORT}/api/health`);
     console.log(`🍽️  Menu: http://localhost:${PORT}/api/menu`);
-    console.log('========================================');
   });
 }
 
