@@ -34,11 +34,10 @@ const LoginPage = () => {
 
   const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY || '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI';
 
-  // Redirect when user becomes available – using full page reload to ensure session
   useEffect(() => {
     if (user) {
       const target = user.role === 'admin' && from === '/' ? '/admin' : from;
-      window.location.href = target;
+      window.location.href = target; // hard redirect to ensure fresh load
     }
   }, [user, from]);
 
@@ -90,7 +89,17 @@ const LoginPage = () => {
         if (!recaptchaToken) { toast.error('Please complete the reCAPTCHA'); setLoading(false); return; }
         submittedRef.current = true;
         try {
-          const res = await fetch('/api/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ name: formData.name, email: formData.email, password: formData.password, recaptchaToken }) });
+          const res = await fetch('/api/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              name: formData.name,
+              email: formData.email,
+              password: formData.password,
+              recaptchaToken
+            })
+          });
           const data = await res.json();
           if (data.success) navigate('/verify-email', { state: { email: formData.email } });
           else toast.error(data.message);
@@ -103,24 +112,32 @@ const LoginPage = () => {
         submittedRef.current = true;
         try {
           await login(formData.email, formData.password);
-          toast.success(`Welcome back, ${formData.email}`);
-          // The useEffect above will redirect after user is set
+          toast.success('Login successful');
+          // Redirect will happen in useEffect
         } catch (err: any) { toast.error(err.message || 'Login failed'); }
         finally { setLoading(false); submittedRef.current = false; }
         return;
       }
     }
-    // Forgot / Verify / Reset flows (unchanged)...
+    // Forgot / Verify / Reset flows (unchanged)
     if (view === 'forgot') {
       try {
-        const res = await fetch('/api/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: formData.email }) });
+        const res = await fetch('/api/forgot-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: formData.email }),
+        });
         const data = await res.json();
         if (data.success) { toast.success(data.message); setTimer(120); setCanResend(false); setView('verify'); } else toast.error(data.message);
       } catch { toast.error('Failed to send reset code'); }
       finally { setLoading(false); }
     } else if (view === 'verify') {
       try {
-        const res = await fetch('/api/verify-reset-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: formData.email, code: formData.code }) });
+        const res = await fetch('/api/verify-reset-code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: formData.email, code: formData.code }),
+        });
         const data = await res.json();
         if (data.success) setView('reset');
         else toast.error(data.message);
@@ -129,7 +146,11 @@ const LoginPage = () => {
     } else if (view === 'reset') {
       if (formData.password !== formData.confirmPassword) { toast.error('Passwords do not match'); setLoading(false); return; }
       try {
-        const res = await fetch('/api/reset-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: formData.email, code: formData.code, password: formData.password }) });
+        const res = await fetch('/api/reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: formData.email, code: formData.code, password: formData.password }),
+        });
         const data = await res.json();
         if (data.success) { toast.success(data.message); setView('auth'); setIsLogin(true); setFormData({ ...formData, password: '', confirmPassword: '', code: '' }); } else toast.error(data.message);
       } catch { toast.error('Failed to reset password'); }
