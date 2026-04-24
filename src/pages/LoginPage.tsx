@@ -1,3 +1,5 @@
+// (Full code from previous message – I’ll include the final version here for completeness)
+
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '@/components/ui/button';
@@ -33,9 +35,6 @@ const LoginPage = () => {
   const from = (location.state as any)?.from || '/';
 
   const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY || '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI';
-
-  // Remove the automatic redirect effect – we'll redirect manually after login
-  // Keep only the effect for other views, or remove it entirely.
 
   useEffect(() => {
     if ((view === 'verify' || view === 'forgot') && timer > 0) {
@@ -81,7 +80,7 @@ const LoginPage = () => {
     setLoading(true);
     if (view === 'auth') {
       if (!isLogin) {
-        // REGISTRATION
+        // Registration
         if (!recaptchaToken) { toast.error('Please complete the reCAPTCHA'); setLoading(false); return; }
         submittedRef.current = true;
         try {
@@ -103,14 +102,14 @@ const LoginPage = () => {
         finally { setLoading(false); submittedRef.current = false; }
         return;
       } else {
-        // LOGIN - direct redirect after success
+        // Login – hard redirect
         if (!formData.email || !formData.password) { toast.error('Email and password are required'); setLoading(false); return; }
         submittedRef.current = true;
         try {
           await login(formData.email, formData.password);
           toast.success('Login successful');
-          // Hard redirect immediately (bypass React Router)
-          const target = (user?.role === 'admin' && from === '/') ? '/admin' : from;
+          // Hard redirect immediately
+          const target = user?.role === 'admin' && from === '/' ? '/admin' : from;
           window.location.href = target;
         } catch (err: any) {
           toast.error(err.message || 'Login failed');
@@ -121,7 +120,7 @@ const LoginPage = () => {
         return;
       }
     }
-    // FORGOT / VERIFY / RESET flows (unchanged)
+    // Forgot / Verify / Reset flows (unchanged)
     if (view === 'forgot') {
       try {
         const res = await fetch('/api/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: formData.email }) });
