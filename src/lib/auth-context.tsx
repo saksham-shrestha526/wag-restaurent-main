@@ -16,7 +16,7 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   isAdmin: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<User>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<boolean>;
 }
@@ -68,8 +68,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     checkAuth().finally(() => setLoading(false));
   }, [checkAuth]);
 
-  const login = async (email: string, password: string) => {
-    if (loginInProgress.current) return;
+  const login = async (email: string, password: string): Promise<User> => {
+    if (loginInProgress.current) throw new Error('Login already in progress');
     loginInProgress.current = true;
     try {
       const res = await fetch('/api/login', {
@@ -84,6 +84,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       setUser(data.user);
       localStorage.setItem('wag_authed_user', JSON.stringify(data.user));
+      return data.user;
     } finally {
       loginInProgress.current = false;
     }

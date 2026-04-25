@@ -27,14 +27,12 @@ const LoginPage = () => {
   const recaptchaRef = useRef<ReCAPTCHA>(null);
   const submittedRef = useRef(false);
 
-  const { user, login } = useAuth();
+  const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const from = (location.state as any)?.from || '/';
 
   const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY || '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI';
-
-  // No automatic redirect effect – we'll redirect manually after login
 
   useEffect(() => {
     if ((view === 'verify' || view === 'forgot') && timer > 0) {
@@ -80,7 +78,7 @@ const LoginPage = () => {
     setLoading(true);
     if (view === 'auth') {
       if (!isLogin) {
-        // REGISTRATION (unchanged)
+        // Registration
         if (!recaptchaToken) { toast.error('Please complete the reCAPTCHA'); setLoading(false); return; }
         submittedRef.current = true;
         try {
@@ -102,7 +100,7 @@ const LoginPage = () => {
         finally { setLoading(false); submittedRef.current = false; }
         return;
       } else {
-        // LOGIN – HARD REDIRECT IMMEDIATELY
+        // Login – direct hard redirect
         if (!formData.email || !formData.password) { toast.error('Email and password are required'); setLoading(false); return; }
         submittedRef.current = true;
         try {
@@ -116,11 +114,11 @@ const LoginPage = () => {
           if (!res.ok || !data.success) {
             throw new Error(data.message || 'Login failed');
           }
-          // Store user in localStorage and context
+          // Store user in localStorage and context (optional, will be synced)
           localStorage.setItem('wag_authed_user', JSON.stringify(data.user));
-          // Force hard redirect to the correct page
-          const target = data.user.role === 'admin' && from === '/' ? '/admin' : from;
           toast.success('Login successful');
+          // Hard redirect – always works
+          const target = data.user.role === 'admin' && from === '/' ? '/admin' : from;
           window.location.href = target;
         } catch (err: any) {
           toast.error(err.message || 'Login failed');
@@ -131,7 +129,7 @@ const LoginPage = () => {
         return;
       }
     }
-    // FORGOT / VERIFY / RESET (unchanged)
+    // Forgot / Verify / Reset flows (unchanged)
     if (view === 'forgot') {
       try {
         const res = await fetch('/api/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: formData.email }) });

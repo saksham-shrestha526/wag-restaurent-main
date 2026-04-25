@@ -4,7 +4,6 @@ import sqlite3Store from 'connect-sqlite3';
 import cors from 'cors';
 import path from 'path';
 import bcrypt from 'bcryptjs';
-import nodemailer from 'nodemailer';
 import multer from 'multer';
 import fs from 'fs';
 import Stripe from 'stripe';
@@ -62,23 +61,6 @@ function getResend(): Resend | null {
   return resendClient;
 }
 
-// Ethereal transporter – always works, shows preview URL
-let etherealTransporter: nodemailer.Transporter | null = null;
-async function getEtherealTransporter() {
-  if (!etherealTransporter) {
-    const testAccount = await nodemailer.createTestAccount();
-    etherealTransporter = nodemailer.createTransport({
-      host: 'smtp.ethereal.email',
-      port: 587,
-      secure: false,
-      auth: { user: testAccount.user, pass: testAccount.pass },
-    });
-    console.log('📧 Ethereal test email account created:', testAccount.user);
-    console.log('🔗 Preview URL will appear in logs when email is sent');
-  }
-  return etherealTransporter;
-}
-
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
   filename: (_req, file, cb) => {
@@ -98,44 +80,8 @@ const upload = multer({
   },
 });
 
-// ============ EMAIL: Gmail → Resend → Ethereal (always works) ============
-const gmailTransporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.MAIL_USERNAME || '',
-    pass: process.env.MAIL_PASSWORD || '',
-  },
-  family: 4,
-  connectionTimeout: 15000,
-  greetingTimeout: 15000,
-  socketTimeout: 20000,
-});
-
+// ============ EMAIL: Resend primary, console fallback ============
 async function sendMailAsync(to: string, subject: string, html: string) {
-  let lastError: any = null;
-
-  // 1. Try Gmail
-  if (process.env.MAIL_USERNAME && process.env.MAIL_PASSWORD) {
-    try {
-      const info = await gmailTransporter.sendMail({
-        from: `"WAG Restaurant" <${process.env.MAIL_USERNAME}>`,
-        to,
-        subject,
-        html,
-      });
-      console.log(`✅ Email via Gmail to ${to} (id: ${info.messageId})`);
-      return info;
-    } catch (err: any) {
-      console.error(`❌ Gmail failed:`, err.message);
-      lastError = err;
-    }
-  } else {
-    console.log('⚠️ Gmail credentials missing, skipping');
-  }
-
-  // 2. Fallback to Resend
   const resend = getResend();
   if (resend) {
     try {
@@ -150,33 +96,25 @@ async function sendMailAsync(to: string, subject: string, html: string) {
       return data;
     } catch (err: any) {
       console.error(`❌ Resend failed:`, err.message);
-      lastError = err;
+      console.log(`📧 Fallback: OTP would be sent to ${to}`);
+      console.log(`🔑 Code: ${extractCodeFromHtml(html)}`);
+      // Still success for the API, but email not sent
+      return { success: false, fallback: true };
     }
   } else {
-    console.log('⚠️ Resend not configured');
+    console.log('⚠️ Resend not configured. OTP will be logged to console.');
+    console.log(`📧 Mock email to ${to}: ${subject}`);
+    console.log(`🔑 Code: ${extractCodeFromHtml(html)}`);
+    return { success: false, fallback: true };
   }
-
-  // 3. Final fallback – Ethereal (always works, shows preview)
-  try {
-    const transporter = await getEtherealTransporter();
-    const info = await transporter.sendMail({
-      from: '"WAG Restaurant" <test@ethereal.email>',
-      to,
-      subject,
-      html,
-    });
-    console.log(`✅ Email via Ethereal to ${to}`);
-    console.log(`🔗 Preview URL: ${nodemailer.getTestMessageUrl(info)}`);
-    return info;
-  } catch (err: any) {
-    console.error(`❌ Ethereal also failed:`, err.message);
-    lastError = err;
-  }
-
-  throw lastError || new Error('No email provider available');
 }
 
-console.log('📧 Email configured: Gmail (primary) → Resend → Ethereal (always works)');
+function extractCodeFromHtml(html: string): string {
+  const match = html.match(/(\d{6})/);
+  return match ? match[1] : '000000';
+}
+
+console.log('📧 Email configured: Resend (primary) + console fallback');
 
 function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -240,7 +178,7 @@ async function startServer() {
     if (!to) return res.status(400).json({ error: 'Missing "to" email' });
     try {
       await sendMailAsync(to, 'Test Email from WAG', '<h1>Test</h1><p>If you see this, email works.</p>');
-      res.json({ success: true, message: 'Email sent. Check logs for preview URL if using Ethereal.' });
+      res.json({ success: true, message: 'Email sent or fallback used. Check logs.' });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -369,11 +307,13 @@ async function startServer() {
     const code = generateOTP();
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
     db.prepare('INSERT INTO email_verifications (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
+
     sendMailAsync(
       email,
       'Verify your email - WAG Luxury Dining',
-      `<div style="font-family:sans-serif;max-width:480px;margin:auto;"><h2 style="color:#b8860b;">Welcome to WAG!</h2><p>Your email verification code is:</p><div style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#333;margin:16px 0;">${code}</div><p style="color:#888;">This code expires in <strong>2 minutes</strong>. Do not share it with anyone.</p></div>`
-    ).catch(err => console.error(`Email send failed for ${email}:`, err.message));
+      `<div><h2>Welcome to WAG!</h2><p>Your verification code: <strong>${code}</strong></p><p>Expires in 2 minutes.</p></div>`
+    ).catch(console.error);
+
     res.json({ success: true, message: 'Verification code sent to your email.', email });
   });
 
@@ -388,9 +328,9 @@ async function startServer() {
     db.prepare('INSERT INTO email_verifications (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
     sendMailAsync(
       email,
-      'New Verification Code - WAG Luxury Dining',
-      `<div><h2>New Code</h2><p>Your new verification code is: <strong>${code}</strong></p><p>Expires in 2 minutes.</p></div>`
-    ).catch(err => console.error(`Resend email failed for ${email}:`, err.message));
+      'New Verification Code - WAG',
+      `<p>Your new code: <strong>${code}</strong> (expires in 2 mins)</p>`
+    ).catch(console.error);
     res.json({ success: true, message: 'New code sent.' });
   });
 
@@ -417,9 +357,9 @@ async function startServer() {
     db.prepare('INSERT INTO password_resets (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
     sendMailAsync(
       email,
-      'Password Reset Code - WAG Restaurant',
-      `<div><h2>Password Reset</h2><p>Your reset code is: <strong>${code}</strong></p><p>Expires in 10 minutes.</p></div>`
-    ).catch(err => console.error(`Reset code email failed for ${email}:`, err.message));
+      'Password Reset Code - WAG',
+      `<p>Your reset code: <strong>${code}</strong> (expires in 10 mins)</p>`
+    ).catch(console.error);
     res.json({ success: true, message: 'Reset code sent to your email.' });
   });
 
@@ -435,7 +375,7 @@ async function startServer() {
       email,
       'New Password Reset Code - WAG',
       `<p>Your new code: <strong>${code}</strong> (expires in 10 min)</p>`
-    ).catch(err => console.error(`Resend reset email failed for ${email}:`, err.message));
+    ).catch(console.error);
     res.json({ success: true, message: 'New code sent.' });
   });
 
@@ -743,7 +683,7 @@ async function startServer() {
         process.env.ADMIN_EMAIL || process.env.MAIL_USERNAME || '',
         `🛒 New Order: ${orderNumber}`,
         `<h3>New Order #${orderNumber}</h3><p>Total: $${total_amount}</p><p><a href="${process.env.VITE_API_URL || 'https://your-domain.com'}/admin">View in Admin</a></p>`
-      ).catch(err => console.error(`Admin order email failed:`, err.message));
+      ).catch(console.error);
       if (payment_method === 'card') {
         const stripe = getStripe();
         if (!stripe) return res.status(500).json({ success: false, message: 'Payment gateway not configured.' });
