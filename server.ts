@@ -225,6 +225,17 @@ async function startServer() {
 
   app.use('/uploads', express.static(UPLOAD_DIR));
 
+  // Serve static files from dist (React build)
+  const distPath = path.join(process.cwd(), 'dist');
+  app.use(express.static(distPath));
+
+  // SPA fallback: serve index.html for all non-API routes
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api')) {
+      res.sendFile(path.join(distPath, 'index.html'));
+    }
+  });
+
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString(), env: process.env.NODE_ENV });
   });
