@@ -10,8 +10,14 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  base: '/',
   server: {
     port: 5173,
+    allowedHosts: [
+      'localhost',
+      '.railway.app',
+      'wag-restaurant-production.up.railway.app',
+    ],
     proxy: {
       '/api': {
         target: 'http://localhost:3011',
@@ -26,5 +32,10 @@ export default defineConfig({
         timeout: 120000,
       },
     },
+  },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    sourcemap: false,
   },
 });

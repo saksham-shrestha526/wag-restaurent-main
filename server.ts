@@ -137,7 +137,8 @@ const ALLOWED_ORIGINS = [
 async function startServer() {
   console.log('🚀 Starting WAG server...');
   const app = express();
-  const PORT = parseInt(process.env.PORT || '3010', 10);
+  // Use Railway's dynamic port (no fixed PORT variable)
+  const PORT = process.env.PORT || 3010;
   const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
   app.set('trust proxy', 1);
@@ -507,7 +508,7 @@ async function startServer() {
     }
   );
 
-  // ============ USER ACCOUNT DETAILS ============
+  // ============ USER ACCOUNT DETAILS (unchanged) ============
   app.get('/api/user/account-details', (req, res) => {
     const userId = (req as any).session?.userId;
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
@@ -1063,7 +1064,7 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ PRODUCTION STATIC FILES (FIXED) ============
+  // ============ PRODUCTION STATIC FILES (FIXED) ==========
   if (IS_PRODUCTION) {
     const distPath = path.join(process.cwd(), 'dist');
     console.log(`📂 Serving static files from: ${distPath}`);
