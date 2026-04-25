@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { api } from './api';
 
 interface User {
   id: number;
@@ -37,16 +38,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const checkAuth = useCallback(async (): Promise<boolean> => {
     try {
-      const res = await fetch('/api/me', { credentials: 'include' });
-      if (!res.ok) {
-        if (res.status === 401 || res.status === 403) {
-          setUser(null);
-          localStorage.removeItem('wag_authed_user');
-          return false;
-        }
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const data = await res.json();
+      const data = await api.getMe();
       if (data.success && data.user) {
         setUser(data.user);
         localStorage.setItem('wag_authed_user', JSON.stringify(data.user));
@@ -56,8 +48,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.removeItem('wag_authed_user');
         return false;
       }
-    } catch (err) {
-      console.error('checkAuth error:', err);
+    } catch (err: any) {
+      if (err.status !== 401) console.error('checkAuth error:', err);
       setUser(null);
       localStorage.removeItem('wag_authed_user');
       return false;
@@ -72,16 +64,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (loginInProgress.current) throw new Error('Login already in progress');
     loginInProgress.current = true;
     try {
-      const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.message || 'Login failed');
-      }
+      const data = await api.login(email, password);
+      if (!data.success) throw new Error(data.message || 'Login failed');
       setUser(data.user);
       localStorage.setItem('wag_authed_user', JSON.stringify(data.user));
       return data.user;
@@ -92,7 +76,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     try {
-      await fetch('/api/logout', { method: 'POST', credentials: 'include' });
+      await api.logout();
     } catch (err) {
       console.error('Logout API error:', err);
     } finally {
@@ -112,8 +96,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (context === undefined) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 };
