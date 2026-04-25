@@ -98,7 +98,6 @@ async function sendMailAsync(to: string, subject: string, html: string) {
       console.error(`❌ Resend failed:`, err.message);
       console.log(`📧 Fallback: OTP would be sent to ${to}`);
       console.log(`🔑 Code: ${extractCodeFromHtml(html)}`);
-      // Still success for the API, but email not sent
       return { success: false, fallback: true };
     }
   } else {
@@ -1064,23 +1063,29 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ PRODUCTION STATIC FILES ============
+  // ============ PRODUCTION STATIC FILES (FIXED) ============
   if (IS_PRODUCTION) {
     const distPath = path.join(process.cwd(), 'dist');
     console.log(`📂 Serving static files from: ${distPath}`);
     if (fs.existsSync(distPath)) {
       app.use(express.static(distPath, { maxAge: '1d' }));
       app.get('*', (req, res) => {
-        if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/')) return res.status(404).json({ message: 'Not found' });
+        if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/')) {
+          return res.status(404).json({ message: 'Not found' });
+        }
         res.sendFile(path.join(distPath, 'index.html'));
       });
     } else {
-      console.warn(`⚠️  dist/ folder not found at ${distPath}. Run 'npm run build' first.`);
+      console.error(`❌ FATAL: dist/ folder not found at ${distPath}. Run 'npm run build' first.`);
+      process.exit(1);
     }
   } else {
     console.log('🔧 Starting Vite development server...');
     const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
     app.use(vite.middlewares);
   }
 
