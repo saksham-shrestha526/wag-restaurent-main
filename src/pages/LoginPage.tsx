@@ -100,26 +100,19 @@ const LoginPage = () => {
         finally { setLoading(false); submittedRef.current = false; }
         return;
       } else {
-        // Login – direct hard redirect
-        if (!formData.email || !formData.password) { toast.error('Email and password are required'); setLoading(false); return; }
+        // LOGIN – use auth context, not hard redirect
+        if (!formData.email || !formData.password) {
+          toast.error('Email and password are required');
+          setLoading(false);
+          return;
+        }
         submittedRef.current = true;
         try {
-          const res = await fetch('/api/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ email: formData.email, password: formData.password })
-          });
-          const data = await res.json();
-          if (!res.ok || !data.success) {
-            throw new Error(data.message || 'Login failed');
-          }
-          // Store user in localStorage and context (optional, will be synced)
-          localStorage.setItem('wag_authed_user', JSON.stringify(data.user));
+          const user = await login(formData.email, formData.password);
           toast.success('Login successful');
-          // Hard redirect – always works
-          const target = data.user.role === 'admin' && from === '/' ? '/admin' : from;
-          window.location.href = target;
+          // Navigate using React Router – no hard reload, context is already updated
+          const target = user.role === 'admin' && from === '/' ? '/admin' : from;
+          navigate(target, { replace: true });
         } catch (err: any) {
           toast.error(err.message || 'Login failed');
         } finally {

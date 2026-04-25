@@ -47,9 +47,9 @@ const Navbar = () => {
     navigate(path);
   };
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
+  const handleLogout = async () => {
+    await logout();
+    navigate('/'); // ✅ Changed from '/login' to '/' (home page)
   };
 
   return (
