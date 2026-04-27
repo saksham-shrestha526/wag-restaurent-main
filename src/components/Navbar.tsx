@@ -49,7 +49,7 @@ const Navbar = () => {
 
   const handleLogout = async () => {
     await logout();
-    navigate('/'); // ✅ Changed from '/login' to '/' (home page)
+    navigate('/');
   };
 
   return (
@@ -63,15 +63,15 @@ const Navbar = () => {
             <span className="text-2xl font-bold text-primary tracking-tighter">{settings.restaurantName?.split(' ')[0] || 'WAG'}</span>
           </Link>
 
-          {/* Desktop Nav - removed focus outline */}
+          {/* Desktop Nav - clean, no yellow */}
           <div className="hidden md:flex items-center space-x-2">
             {navLinks.map((link) => (
               <Link
                 key={link.path}
                 to={link.path}
-                className={`relative px-5 py-2 text-sm font-bold transition-colors duration-150 rounded-xl focus:outline-none focus:ring-0 ${
+                className={`relative px-5 py-2 text-sm font-bold transition-all duration-150 rounded-xl focus:outline-none focus:ring-0 ${
                   location.pathname === link.path 
-                    ? 'text-yellow-400' 
+                    ? 'text-white after:absolute after:bottom-0 after:left-1/2 after:-translate-x-1/2 after:w-6 after:h-0.5 after:bg-gradient-to-r after:from-amber-500 after:to-amber-600 after:rounded-full' 
                     : 'text-gray-400 hover:text-white hover:bg-white/5'
                 }`}
               >
@@ -81,7 +81,7 @@ const Navbar = () => {
           </div>
 
           <div className="hidden md:flex items-center space-x-4">
-            <Link to="/cart" className="relative focus:outline-none focus:ring-0">
+            <Link to="/cart" className="focus:outline-none focus:ring-0">
               <Button variant="ghost" size="icon" className="relative focus:outline-none focus:ring-0">
                 <ShoppingCart className="h-5 w-5 text-white" />
                 {items.length > 0 && (
@@ -198,7 +198,7 @@ const Navbar = () => {
         </div>
       </div>
 
-      {/* Mobile Nav */}
+      {/* Mobile Nav - active link also white, no yellow */}
       {isOpen && (
         <div className="md:hidden bg-black/95 backdrop-blur-3xl border-b border-white/10 overflow-hidden">
           <div className="px-4 pt-2 pb-8 space-y-1">
@@ -225,7 +225,7 @@ const Navbar = () => {
                 to={link.path}
                 onClick={() => setIsOpen(false)}
                 className={`block px-3 py-4 text-base font-bold focus:outline-none focus:ring-0 ${
-                  location.pathname === link.path ? 'text-yellow-400' : 'text-gray-400 hover:text-white'
+                  location.pathname === link.path ? 'text-white' : 'text-gray-400 hover:text-white'
                 }`}
               >
                 {link.name}
@@ -246,7 +246,7 @@ const Navbar = () => {
                   <Link
                     to="/admin"
                     onClick={() => setIsOpen(false)}
-                    className="flex items-center space-x-3 px-3 py-4 text-base font-bold text-yellow-400 hover:opacity-80 focus:outline-none focus:ring-0"
+                    className="flex items-center space-x-3 px-3 py-4 text-base font-bold text-white hover:opacity-80 focus:outline-none focus:ring-0"
                   >
                     <LayoutDashboard className="h-5 w-5" />
                     <span>Admin Dashboard</span>

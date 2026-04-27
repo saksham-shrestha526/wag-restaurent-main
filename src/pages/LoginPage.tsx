@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/lib/auth-context';
+import { api } from '@/lib/api';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Eye, EyeOff, Loader2, X, ChefHat, Mail, KeyRound, Lock, ArrowLeft, RefreshCw } from 'lucide-react';
@@ -57,16 +58,26 @@ const LoginPage = () => {
     }
     setResendLoading(true);
     try {
-      let endpoint = '';
-      let body = { email: formData.email };
-      if (view === 'verify') endpoint = '/api/resend-verification';
-      else if (view === 'forgot') endpoint = '/api/resend-reset-code';
-      const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const data = await res.json();
-      if (data.success) { toast.success('New code sent to your email'); setTimer(120); setCanResend(false); }
-      else toast.error(data.message);
-    } catch (error) { toast.error('Failed to resend code'); }
-    finally { setResendLoading(false); }
+      let response;
+      if (view === 'verify') {
+        response = await api.resendVerification(formData.email);
+      } else if (view === 'forgot') {
+        response = await api.resendResetCode(formData.email);
+      } else {
+        return;
+      }
+      if (response.success) { 
+        toast.success('New code sent to your email'); 
+        setTimer(120); 
+        setCanResend(false); 
+      } else {
+        toast.error(response.message);
+      }
+    } catch (error: any) { 
+      toast.error(error.message || 'Failed to resend code'); 
+    } finally { 
+      setResendLoading(false); 
+    }
   };
 
   const handleRecaptchaChange = (token: string | null) => setRecaptchaToken(token);
@@ -76,31 +87,28 @@ const LoginPage = () => {
     e.preventDefault();
     if (submittedRef.current) return;
     setLoading(true);
+    
     if (view === 'auth') {
       if (!isLogin) {
-        // Registration (unchanged)
+        // Registration
         if (!recaptchaToken) { toast.error('Please complete the reCAPTCHA'); setLoading(false); return; }
         submittedRef.current = true;
         try {
-          const res = await fetch('/api/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              name: formData.name,
-              email: formData.email,
-              password: formData.password,
-              recaptchaToken
-            })
-          });
-          const data = await res.json();
-          if (data.success) navigate('/verify-email', { state: { email: formData.email } });
-          else toast.error(data.message);
-        } catch (err) { toast.error('Registration failed'); }
-        finally { setLoading(false); submittedRef.current = false; }
+          const data = await api.register(formData.name, formData.email, formData.password, recaptchaToken);
+          if (data.success) {
+            navigate('/verify-email', { state: { email: formData.email } });
+          } else {
+            toast.error(data.message);
+          }
+        } catch (err: any) { 
+          toast.error(err.message || 'Registration failed'); 
+        } finally { 
+          setLoading(false); 
+          submittedRef.current = false; 
+        }
         return;
       } else {
-        // LOGIN – use auth context
+        // LOGIN
         if (!formData.email || !formData.password) {
           toast.error('Email and password are required');
           setLoading(false);
@@ -110,8 +118,6 @@ const LoginPage = () => {
         try {
           const user = await login(formData.email, formData.password);
           toast.success(`Welcome back, ${user.name}`);
-          // Debug: check user object
-          console.log('Logged in user:', user);
           const target = user.role === 'admin' && from === '/' ? '/admin' : from;
           navigate(target, { replace: true });
         } catch (err: any) {
@@ -123,30 +129,62 @@ const LoginPage = () => {
         return;
       }
     }
-    // Forgot / Verify / Reset flows (unchanged)
+    
+    // Forgot Password
     if (view === 'forgot') {
       try {
-        const res = await fetch('/api/forgot-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: formData.email }) });
-        const data = await res.json();
-        if (data.success) { toast.success(data.message); setTimer(120); setCanResend(false); setView('verify'); } else toast.error(data.message);
-      } catch { toast.error('Failed to send reset code'); }
-      finally { setLoading(false); }
-    } else if (view === 'verify') {
+        const data = await api.forgotPassword(formData.email);
+        if (data.success) { 
+          toast.success(data.message); 
+          setTimer(120); 
+          setCanResend(false); 
+          setView('verify'); 
+        } else {
+          toast.error(data.message);
+        }
+      } catch (error: any) { 
+        toast.error(error.message || 'Failed to send reset code'); 
+      } finally { 
+        setLoading(false); 
+      }
+    } 
+    // Verify Code
+    else if (view === 'verify') {
       try {
-        const res = await fetch('/api/verify-reset-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: formData.email, code: formData.code }) });
-        const data = await res.json();
-        if (data.success) setView('reset');
-        else toast.error(data.message);
-      } catch { toast.error('Verification failed'); }
-      finally { setLoading(false); }
-    } else if (view === 'reset') {
-      if (formData.password !== formData.confirmPassword) { toast.error('Passwords do not match'); setLoading(false); return; }
+        const data = await api.verifyResetCode(formData.email, formData.code);
+        if (data.success) {
+          setView('reset');
+        } else {
+          toast.error(data.message);
+        }
+      } catch (error: any) { 
+        toast.error(error.message || 'Verification failed'); 
+      } finally { 
+        setLoading(false); 
+      }
+    } 
+    // Reset Password
+    else if (view === 'reset') {
+      if (formData.password !== formData.confirmPassword) { 
+        toast.error('Passwords do not match'); 
+        setLoading(false); 
+        return; 
+      }
       try {
-        const res = await fetch('/api/reset-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: formData.email, code: formData.code, password: formData.password }) });
-        const data = await res.json();
-        if (data.success) { toast.success(data.message); setView('auth'); setIsLogin(true); setFormData({ ...formData, password: '', confirmPassword: '', code: '' }); } else toast.error(data.message);
-      } catch { toast.error('Failed to reset password'); }
-      finally { setLoading(false); }
+        const data = await api.resetPassword(formData.email, formData.code, formData.password);
+        if (data.success) { 
+          toast.success(data.message); 
+          setView('auth'); 
+          setIsLogin(true); 
+          setFormData({ ...formData, password: '', confirmPassword: '', code: '' }); 
+        } else {
+          toast.error(data.message);
+        }
+      } catch (error: any) { 
+        toast.error(error.message || 'Failed to reset password'); 
+      } finally { 
+        setLoading(false); 
+      }
     }
   };
 
@@ -182,7 +220,7 @@ const LoginPage = () => {
                 </motion.div>)}
                 {view === 'forgot' && (<motion.div key="forgot-fields" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-2"><Label htmlFor="forgot-email">Email Address</Label><Input id="forgot-email" type="email" placeholder="Your email" required className="bg-muted/50 border-white/10" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} /></motion.div>)}
                 {view === 'verify' && (<motion.div key="verify-fields" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-4"><div className="space-y-2"><Label htmlFor="code">6-Digit Code</Label><Input id="code" type="text" placeholder="XXXXXX" maxLength={6} required className="bg-muted/50 border-white/10 text-center text-2xl tracking-[0.5em] font-bold h-14" value={formData.code} onChange={(e) => setFormData({ ...formData, code: e.target.value.replace(/\D/g, '').slice(0, 6) })} /></div><div className="flex items-center justify-between text-sm"><div className="text-muted-foreground">{timer > 0 ? (<span>Code expires in: <span className="font-mono font-bold text-primary">{Math.floor(timer / 60)}:{String(timer % 60).padStart(2, '0')}</span></span>) : (<span className="text-red-400">Code expired</span>)}</div><button type="button" onClick={handleResendCode} disabled={!canResend || resendLoading} className={`text-xs font-medium transition-all ${canResend ? 'text-primary hover:underline' : 'text-muted-foreground cursor-not-allowed opacity-50'}`}>{resendLoading ? <Loader2 className="h-3 w-3 animate-spin inline mr-1" /> : null}Resend code</button></div></motion.div>)}
-                {view === 'reset' && (<motion.div key="reset-fields" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-5"><div className="space-y-2"><Label htmlFor="new-password">New Password</Label><Input id="new-password" type="password" placeholder="••••••••" required className="bg-muted/50 border-white/10" value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} /></div><div className="space-y-2"><Label htmlFor="confirm-password">Confirm Password</Label><Input id="confirm-password" type="password" placeholder="••••••••" required className="bg-muted/50 border-white/10" value={formData.confirmPassword} onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })} /></div></motion.div>)}
+                {view === 'reset' && (<motion.div key="reset-fields" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-5"><div className="space-y-2"><Label htmlFor="new-password">New Password</Label><Input id="new-password" type="password" placeholder="New password" required className="bg-muted/50 border-white/10" value={formData.password} onChange={(e) => setFormData({ ...formData, password: e.target.value })} /></div><div className="space-y-2"><Label htmlFor="confirm-password">Confirm Password</Label><Input id="confirm-password" type="password" placeholder="Confirm password" required className="bg-muted/50 border-white/10" value={formData.confirmPassword} onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })} /></div></motion.div>)}
               </AnimatePresence>
               <Button type="submit" disabled={loading} className="w-full gold-gradient text-primary-foreground font-bold h-11 text-sm">{loading ? <Loader2 className="animate-spin mr-2" /> : null}{view === 'auth' ? (isLogin ? 'Sign In' : 'Create Account') : view === 'forgot' ? 'Send Reset Code' : view === 'verify' ? 'Verify Code' : 'Reset Password'}</Button>
             </form>

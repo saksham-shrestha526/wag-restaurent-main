@@ -80,31 +80,43 @@ const upload = multer({
   },
 });
 
-// ============ EMAIL: Resend primary, console fallback ============
 async function sendMailAsync(to: string, subject: string, html: string) {
   const resend = getResend();
+  
+  if (!to || !to.includes('@')) {
+    console.error(`❌ Invalid email address: ${to}`);
+    return { success: false, error: 'Invalid email address' };
+  }
+  
   if (resend) {
     try {
+      console.log(`📧 Sending email to: ${to}`);
+      console.log(`📧 Subject: ${subject}`);
+      
       const { data, error } = await resend.emails.send({
-        from: `WAG Restaurant <onboarding@resend.dev>`,
-        to,
-        subject,
-        html,
+        from: 'WAG Restaurant <onboarding@resend.dev>',
+        to: [to],
+        subject: subject,
+        html: html,
       });
-      if (error) throw new Error(error.message);
-      console.log(`✅ Email via Resend to ${to} (id: ${data?.id})`);
-      return data;
+      
+      if (error) {
+        console.error(`❌ Resend error:`, error.message);
+        console.log(`🔑 OTP Code: ${extractCodeFromHtml(html)}`);
+        return { success: false, error: error.message, fallback: true, code: extractCodeFromHtml(html) };
+      }
+      
+      console.log(`✅ Email sent successfully to ${to} (id: ${data?.id})`);
+      return { success: true, id: data?.id };
     } catch (err: any) {
-      console.error(`❌ Resend failed:`, err.message);
-      console.log(`📧 Fallback: OTP would be sent to ${to}`);
-      console.log(`🔑 Code: ${extractCodeFromHtml(html)}`);
-      return { success: false, fallback: true };
+      console.error(`❌ Resend exception:`, err.message);
+      console.log(`🔑 OTP Code: ${extractCodeFromHtml(html)}`);
+      return { success: false, error: err.message, fallback: true, code: extractCodeFromHtml(html) };
     }
   } else {
     console.log('⚠️ Resend not configured. OTP will be logged to console.');
-    console.log(`📧 Mock email to ${to}: ${subject}`);
-    console.log(`🔑 Code: ${extractCodeFromHtml(html)}`);
-    return { success: false, fallback: true };
+    console.log(`🔑 OTP Code: ${extractCodeFromHtml(html)}`);
+    return { success: false, fallback: true, code: extractCodeFromHtml(html) };
   }
 }
 
@@ -113,7 +125,7 @@ function extractCodeFromHtml(html: string): string {
   return match ? match[1] : '000000';
 }
 
-console.log('📧 Email configured: Resend (primary) + console fallback');
+console.log('📧 Email configured: Resend with console fallback');
 
 function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -130,6 +142,8 @@ const ALLOWED_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:5174',
   'http://localhost:3001',
+  'http://localhost:3010',
+  'http://localhost:3011',
   process.env.FRONTEND_URL,
   process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : undefined,
 ].filter(Boolean) as string[];
@@ -137,13 +151,11 @@ const ALLOWED_ORIGINS = [
 async function startServer() {
   console.log('🚀 Starting WAG server...');
   const app = express();
-  // Use Railway's dynamic port (no fixed PORT variable)
-  const PORT = process.env.PORT || 3010;
+  const PORT = process.env.PORT || 3011;
   const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
   app.set('trust proxy', 1);
 
-  // Stripe webhook (raw body)
   app.post('/api/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
     const sig = req.headers['stripe-signature'] as string;
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -177,8 +189,8 @@ async function startServer() {
     const { to } = req.body;
     if (!to) return res.status(400).json({ error: 'Missing "to" email' });
     try {
-      await sendMailAsync(to, 'Test Email from WAG', '<h1>Test</h1><p>If you see this, email works.</p>');
-      res.json({ success: true, message: 'Email sent or fallback used. Check logs.' });
+      const result = await sendMailAsync(to, 'Test Email from WAG', '<h1>Test</h1><p>If you see this, email works.</p>');
+      res.json({ success: true, message: 'Email sent or fallback used. Check logs.', result });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -262,7 +274,7 @@ async function startServer() {
     }
   });
 
-  // ============ AUTH ROUTES ============
+  // ============ AUTH ROUTES WITH 2 MINUTE OTP ============
   app.post('/api/register', async (req, res) => {
     const { name, email, password, phone = '', recaptchaToken } = req.body;
     if (!name || !email || !password) {
@@ -308,12 +320,21 @@ async function startServer() {
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
     db.prepare('INSERT INTO email_verifications (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
 
-    sendMailAsync(
+    await sendMailAsync(
       email,
       'Verify your email - WAG Luxury Dining',
-      `<div><h2>Welcome to WAG!</h2><p>Your verification code: <strong>${code}</strong></p><p>Expires in 2 minutes.</p></div>`
-    ).catch(console.error);
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+        <h2 style="color: #b8860b; text-align: center;">Welcome to WAG!</h2>
+        <p style="text-align: center;">Your verification code is:</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <span style="font-size: 36px; font-weight: bold; letter-spacing: 5px; background: #f5f5f5; padding: 15px 30px; border-radius: 8px;">${code}</span>
+        </div>
+        <p style="text-align: center;">This code expires in 2 minutes.</p>
+        <p style="text-align: center; color: #666; font-size: 12px;">If you didn't request this, please ignore this email.</p>
+      </div>`
+    );
 
+    console.log(`📧 Registration OTP for ${email}: ${code}`);
     res.json({ success: true, message: 'Verification code sent to your email.', email });
   });
 
@@ -326,11 +347,18 @@ async function startServer() {
     const code = generateOTP();
     const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
     db.prepare('INSERT INTO email_verifications (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
-    sendMailAsync(
+    
+    await sendMailAsync(
       email,
       'New Verification Code - WAG',
-      `<p>Your new code: <strong>${code}</strong> (expires in 2 mins)</p>`
-    ).catch(console.error);
+      `<div style="font-family: Arial, sans-serif; max-width: 600px;">
+        <h2 style="color: #b8860b;">New Verification Code</h2>
+        <p>Your new code: <strong style="font-size: 24px;">${code}</strong></p>
+        <p>Expires in 2 minutes.</p>
+      </div>`
+    );
+    
+    console.log(`📧 Resend verification OTP for ${email}: ${code}`);
     res.json({ success: true, message: 'New code sent.' });
   });
 
@@ -347,54 +375,106 @@ async function startServer() {
     res.json({ success: true, message: 'Email verified! You can now log in.' });
   });
 
+  // ============ PASSWORD RESET ROUTES WITH 2 MINUTE OTP ============
   app.post('/api/forgot-password', async (req, res) => {
     const { email } = req.body;
+    console.log(`🔐 Forgot password request for: ${email}`);
+    
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required.' });
+    }
+    
     const user = db.prepare('SELECT id, name FROM users WHERE email = ?').get(email) as any;
-    if (!user) return res.status(404).json({ success: false, message: 'No account found with this email.' });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'No account found with this email.' });
+    }
+    
     const code = generateOTP();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
     db.prepare('DELETE FROM password_resets WHERE email = ?').run(email);
     db.prepare('INSERT INTO password_resets (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
-    sendMailAsync(
+    
+    console.log(`📧 Sending password reset OTP ${code} to ${email}`);
+    
+    await sendMailAsync(
       email,
-      'Password Reset Code - WAG',
-      `<p>Your reset code: <strong>${code}</strong> (expires in 10 mins)</p>`
-    ).catch(console.error);
+      'Password Reset Code - WAG Restaurant',
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+        <h2 style="color: #b8860b; text-align: center;">Password Reset Request</h2>
+        <p style="text-align: center;">You requested to reset your password. Use the code below:</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <span style="font-size: 36px; font-weight: bold; letter-spacing: 5px; background: #f5f5f5; padding: 15px 30px; border-radius: 8px;">${code}</span>
+        </div>
+        <p style="text-align: center;">This code expires in 2 minutes.</p>
+        <p style="text-align: center; color: #666; font-size: 12px;">If you didn't request this, please ignore this email.</p>
+      </div>`
+    );
+    
     res.json({ success: true, message: 'Reset code sent to your email.' });
   });
 
   app.post('/api/resend-reset-code', async (req, res) => {
     const { email } = req.body;
+    if (!email) return res.status(400).json({ success: false, message: 'Email required.' });
+    
     const user = db.prepare('SELECT id FROM users WHERE email = ?').get(email) as any;
     if (!user) return res.status(404).json({ success: false, message: 'No account found.' });
+    
     const code = generateOTP();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
     db.prepare('DELETE FROM password_resets WHERE email = ?').run(email);
     db.prepare('INSERT INTO password_resets (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
-    sendMailAsync(
+    
+    await sendMailAsync(
       email,
       'New Password Reset Code - WAG',
-      `<p>Your new code: <strong>${code}</strong> (expires in 10 min)</p>`
-    ).catch(console.error);
+      `<div style="font-family: Arial, sans-serif;">
+        <h2 style="color: #b8860b;">New Password Reset Code</h2>
+        <p>Your new code: <strong style="font-size: 24px;">${code}</strong></p>
+        <p>Expires in 2 minutes.</p>
+      </div>`
+    );
+    
+    console.log(`📧 Resend reset OTP for ${email}: ${code}`);
     res.json({ success: true, message: 'New code sent.' });
   });
 
   app.post('/api/verify-reset-code', (req, res) => {
     const { email, code } = req.body;
+    console.log(`🔐 Verifying reset code for ${email}: ${code}`);
+    
     const reset = db.prepare('SELECT * FROM password_resets WHERE email = ? AND code = ?').get(email, code) as any;
-    if (!reset) return res.status(400).json({ success: false, message: 'Invalid reset code.' });
-    if (new Date(reset.expires_at) < new Date()) return res.status(400).json({ success: false, message: 'Reset code has expired.' });
+    if (!reset) {
+      return res.status(400).json({ success: false, message: 'Invalid reset code.' });
+    }
+    if (new Date(reset.expires_at) < new Date()) {
+      return res.status(400).json({ success: false, message: 'Reset code has expired.' });
+    }
     res.json({ success: true });
   });
 
   app.post('/api/reset-password', async (req, res) => {
     const { email, code, password } = req.body;
+    console.log(`🔐 Resetting password for ${email}`);
+    
     const reset = db.prepare('SELECT * FROM password_resets WHERE email = ? AND code = ?').get(email, code) as any;
-    if (!reset || new Date(reset.expires_at) < new Date()) return res.status(400).json({ success: false, message: 'Invalid or expired reset code.' });
-    if (!password || password.length < 8) return res.status(400).json({ success: false, message: 'Password must be at least 8 characters.' });
+    if (!reset || new Date(reset.expires_at) < new Date()) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired reset code.' });
+    }
+    if (!password || password.length < 8) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 8 characters.' });
+    }
+    
     const hashedPassword = bcrypt.hashSync(password, 8);
     db.prepare('UPDATE users SET password = ? WHERE email = ?').run(hashedPassword, email);
     db.prepare('DELETE FROM password_resets WHERE email = ?').run(email);
+    
+    await sendMailAsync(
+      email,
+      'Password Reset Successful - WAG',
+      `<h2>Password Reset Successful</h2><p>Your password has been changed. If you didn't do this, please contact us immediately.</p>`
+    ).catch(console.error);
+    
     res.json({ success: true, message: 'Password updated successfully.' });
   });
 
@@ -508,7 +588,6 @@ async function startServer() {
     }
   );
 
-  // ============ USER ACCOUNT DETAILS (unchanged) ============
   app.get('/api/user/account-details', (req, res) => {
     const userId = (req as any).session?.userId;
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
@@ -587,7 +666,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ PAYMENT METHODS ============
   async function getOrCreateStripeCustomer(userId: number, email: string, name: string): Promise<string> {
     const user = db.prepare('SELECT stripe_customer_id FROM users WHERE id = ?').get(userId) as any;
     if (user?.stripe_customer_id) return user.stripe_customer_id;
@@ -653,7 +731,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ ORDERS ============
   app.post('/api/orders', async (req, res) => {
     const userId = (req as any).session?.userId;
     if (!userId) return res.status(401).json({ success: false, message: 'Please log in to place an order.' });
@@ -719,7 +796,6 @@ async function startServer() {
     }
   });
 
-  // ============ MENU ROUTES ============
   app.get('/api/menu', (_req, res) => {
     const menu = db.prepare('SELECT * FROM menu_items WHERE is_available = 1').all();
     res.json(menu);
@@ -761,7 +837,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ RESERVATIONS ============
   app.post('/api/reservations', async (req, res) => {
     const { name, email, phone, date, time, guests, notes } = req.body;
     if (!name || !email || !phone || !date || !time || !guests) return res.status(400).json({ success: false, message: 'All fields are required.' });
@@ -802,7 +877,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ CONTACT FORM ============
   app.post('/api/contact', async (req, res) => {
     const { name, email, subject, message } = req.body;
     if (!name || !email || !message) return res.status(400).json({ success: false, message: 'Name, email, and message are required.' });
@@ -831,7 +905,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ AI CONCIERGE ============
   app.post('/api/concierge', async (req, res) => {
     const { messages, userName = 'Guest' } = req.body;
     const groqApiKey = process.env.GROQ_API_KEY;
@@ -894,7 +967,6 @@ async function startServer() {
     }
   });
 
-  // ============ ADMIN ROUTES ============
   function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
     if ((req as any).session?.userRole !== 'admin') return res.status(403).json({ success: false, message: 'Admin access required.' });
     next();
@@ -1027,7 +1099,6 @@ async function startServer() {
     }
   });
 
-  // ============ SETTINGS ============
   app.get('/api/settings', (_req, res) => {
     try {
       const rows = db.prepare('SELECT key, value FROM settings').all() as any[];
@@ -1064,7 +1135,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ PRODUCTION STATIC FILES (FIXED) ==========
   if (IS_PRODUCTION) {
     const distPath = path.join(process.cwd(), 'dist');
     console.log(`📂 Serving static files from: ${distPath}`);
@@ -1100,6 +1170,8 @@ async function startServer() {
     console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`📊 Health: http://localhost:${PORT}/api/health`);
     console.log(`🍽️  Menu: http://localhost:${PORT}/api/menu`);
+    console.log(`📧 Email service: ${process.env.RESEND_API_KEY ? 'Resend configured' : 'Console fallback only'}`);
+    console.log(`⏱️  OTP expires in 2 minutes`);
   });
 }
 
