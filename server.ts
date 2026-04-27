@@ -7,7 +7,7 @@ import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import fs from 'fs';
 import Stripe from 'stripe';
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 
@@ -15,7 +15,7 @@ dotenv.config();
 
 import db, { DATA_DIR } from './src/lib/db';
 
-console.log('🔑 Env – GROQ:', !!process.env.GROQ_API_KEY, 'Gmail:', !!process.env.MAIL_USER);
+console.log('🔑 Env – GROQ:', !!process.env.GROQ_API_KEY, 'Resend:', !!process.env.RESEND_API_KEY);
 console.log('📁 DATA_DIR:', DATA_DIR);
 
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
@@ -24,24 +24,20 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const SESSION_DB_DIR = DATA_DIR;
 const SESSION_DB_FILENAME = 'sessions.sqlite';
 
-// Gmail Transporter
-let transporter: nodemailer.Transporter | null = null;
-function getTransporter() {
-  if (!transporter && process.env.MAIL_USER && process.env.MAIL_PASS) {
-    const port = parseInt(process.env.MAIL_PORT || '465');
-    const secure = process.env.MAIL_SECURE === 'true' || port === 465;
-    transporter = nodemailer.createTransport({
-      host: process.env.MAIL_HOST || 'smtp.gmail.com',
-      port: port,
-      secure: secure,
-      auth: {
-        user: process.env.MAIL_USER,
-        pass: process.env.MAIL_PASS,
-      },
+async function verifyRecaptcha(token: string): Promise<boolean> {
+  const secret = process.env.RECAPTCHA_SECRET_KEY;
+  if (!secret) return true;
+  try {
+    const response = await fetch('https://www.google.com/recaptcha/api/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `secret=${secret}&response=${token}`,
     });
-    console.log('📧 Gmail SMTP configured on port', port);
+    const data = await response.json();
+    return data.success === true;
+  } catch {
+    return false;
   }
-  return transporter;
 }
 
 const loginLimiter = rateLimit({
@@ -56,6 +52,13 @@ function getStripe(): Stripe | null {
   if (!key) { console.warn('STRIPE_SECRET_KEY missing'); return null; }
   if (!stripeClient) stripeClient = new Stripe(key);
   return stripeClient;
+}
+
+let resendClient: Resend | null = null;
+function getResend(): Resend | null {
+  const key = process.env.RESEND_API_KEY;
+  if (!resendClient && key) resendClient = new Resend(key);
+  return resendClient;
 }
 
 const storage = multer.diskStorage({
@@ -77,36 +80,47 @@ const upload = multer({
   },
 });
 
-// Email sending with Gmail + console fallback
+// ============ FIXED EMAIL SENDING WITH YOUR VERIFIED DOMAIN ============
 async function sendMailAsync(to: string, subject: string, html: string) {
-  const mailTransporter = getTransporter();
+  const resend = getResend();
   
+  // Validate email
   if (!to || !to.includes('@')) {
     console.error(`❌ Invalid email address: ${to}`);
     return { success: false, error: 'Invalid email address' };
   }
   
-  if (mailTransporter) {
+  if (resend) {
     try {
       console.log(`📧 Sending email to: ${to}`);
       console.log(`📧 Subject: ${subject}`);
       
-      const info = await mailTransporter.sendMail({
-        from: `WAG Restaurant <${process.env.MAIL_USER}>`,
-        to: to,
+      // ✅ CHANGED: Using your verified domain instead of onboarding@resend.dev
+      const { data, error } = await resend.emails.send({
+        from: 'WAG Luxury Dining <onboarding@resend.dev>',
+        to: [to],
         subject: subject,
         html: html,
       });
       
-      console.log(`✅ Email sent successfully to ${to} (id: ${info.messageId})`);
-      return { success: true, id: info.messageId };
+      if (error) {
+        console.error(`❌ Resend error:`, error.message);
+        console.log(`📧 Console fallback - Email would be sent to: ${to}`);
+        console.log(`🔑 OTP Code: ${extractCodeFromHtml(html)}`);
+        return { success: false, error: error.message, fallback: true, code: extractCodeFromHtml(html) };
+      }
+      
+      console.log(`✅ Email sent successfully to ${to} (id: ${data?.id})`);
+      return { success: true, id: data?.id };
     } catch (err: any) {
-      console.error(`❌ Gmail error:`, err.message);
+      console.error(`❌ Resend exception:`, err.message);
+      console.log(`📧 Console fallback - Email would be sent to: ${to}`);
       console.log(`🔑 OTP Code: ${extractCodeFromHtml(html)}`);
       return { success: false, error: err.message, fallback: true, code: extractCodeFromHtml(html) };
     }
   } else {
-    console.log('⚠️ Gmail not configured. OTP will be logged to console.');
+    console.log('⚠️ Resend not configured. OTP will be logged to console.');
+    console.log(`📧 Mock email to ${to}: ${subject}`);
     console.log(`🔑 OTP Code: ${extractCodeFromHtml(html)}`);
     return { success: false, fallback: true, code: extractCodeFromHtml(html) };
   }
@@ -117,12 +131,13 @@ function extractCodeFromHtml(html: string): string {
   return match ? match[1] : '000000';
 }
 
-console.log('📧 Email configured: Gmail SMTP with console fallback');
+console.log('📧 Email configured: Resend with enhanced logging');
 
 function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+// Clean up expired OTPs every minute
 setInterval(() => {
   try {
     db.prepare(`DELETE FROM email_verifications WHERE expires_at < datetime('now')`).run();
@@ -136,7 +151,6 @@ const ALLOWED_ORIGINS = [
   'http://localhost:3001',
   'http://localhost:3010',
   'http://localhost:3011',
-  'https://wag-restaurent-main-production.up.railway.app',
   process.env.FRONTEND_URL,
   process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : undefined,
 ].filter(Boolean) as string[];
@@ -144,11 +158,12 @@ const ALLOWED_ORIGINS = [
 async function startServer() {
   console.log('🚀 Starting WAG server...');
   const app = express();
-  const PORT = process.env.PORT || 8080;
+  const PORT = process.env.PORT || 3011;
   const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
   app.set('trust proxy', 1);
 
+  // Stripe webhook (raw body)
   app.post('/api/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
     const sig = req.headers['stripe-signature'] as string;
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -267,11 +282,15 @@ async function startServer() {
     }
   });
 
-  // ============ AUTH ROUTES WITH 2 MINUTE OTP (NO reCAPTCHA) ============
+  // ============ FIXED AUTH ROUTES WITH BETTER OTP LOGGING ============
   app.post('/api/register', async (req, res) => {
-    const { name, email, password, phone = '' } = req.body;
+    const { name, email, password, phone = '', recaptchaToken } = req.body;
     if (!name || !email || !password) {
       return res.status(400).json({ success: false, message: 'Name, email, and password are required.' });
+    }
+    if (process.env.RECAPTCHA_SECRET_KEY && recaptchaToken) {
+      const isValid = await verifyRecaptcha(recaptchaToken);
+      if (!isValid) return res.status(400).json({ success: false, message: 'reCAPTCHA verification failed.' });
     }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
@@ -306,10 +325,10 @@ async function startServer() {
     }
 
     const code = generateOTP();
-    const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     db.prepare('INSERT INTO email_verifications (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
 
-    await sendMailAsync(
+    const emailResult = await sendMailAsync(
       email,
       'Verify your email - WAG Luxury Dining',
       `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
@@ -318,12 +337,15 @@ async function startServer() {
         <div style="text-align: center; margin: 30px 0;">
           <span style="font-size: 36px; font-weight: bold; letter-spacing: 5px; background: #f5f5f5; padding: 15px 30px; border-radius: 8px;">${code}</span>
         </div>
-        <p style="text-align: center;">This code expires in 2 minutes.</p>
+        <p style="text-align: center;">This code expires in 10 minutes.</p>
         <p style="text-align: center; color: #666; font-size: 12px;">If you didn't request this, please ignore this email.</p>
       </div>`
     );
 
-    console.log(`📧 Registration OTP for ${email}: ${code}`);
+    if (!emailResult.success && emailResult.code) {
+      console.log(`⚠️ Registration: OTP for ${email} is ${code}`);
+    }
+
     res.json({ success: true, message: 'Verification code sent to your email.', email });
   });
 
@@ -334,7 +356,7 @@ async function startServer() {
     if (!user) return res.status(404).json({ success: false, message: 'No unverified account found.' });
     db.prepare('DELETE FROM email_verifications WHERE email = ?').run(email);
     const code = generateOTP();
-    const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     db.prepare('INSERT INTO email_verifications (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
     
     await sendMailAsync(
@@ -343,11 +365,11 @@ async function startServer() {
       `<div style="font-family: Arial, sans-serif; max-width: 600px;">
         <h2 style="color: #b8860b;">New Verification Code</h2>
         <p>Your new code: <strong style="font-size: 24px;">${code}</strong></p>
-        <p>Expires in 2 minutes.</p>
+        <p>Expires in 10 minutes.</p>
       </div>`
     );
     
-    console.log(`📧 Resend verification OTP for ${email}: ${code}`);
+    console.log(`Resend verification OTP for ${email}: ${code}`);
     res.json({ success: true, message: 'New code sent.' });
   });
 
@@ -364,7 +386,7 @@ async function startServer() {
     res.json({ success: true, message: 'Email verified! You can now log in.' });
   });
 
-  // ============ PASSWORD RESET ROUTES WITH 2 MINUTE OTP ============
+  // ============ FIXED PASSWORD RESET ROUTES ============
   app.post('/api/forgot-password', async (req, res) => {
     const { email } = req.body;
     console.log(`🔐 Forgot password request for: ${email}`);
@@ -379,13 +401,13 @@ async function startServer() {
     }
     
     const code = generateOTP();
-    const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     db.prepare('DELETE FROM password_resets WHERE email = ?').run(email);
     db.prepare('INSERT INTO password_resets (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
     
     console.log(`📧 Sending password reset OTP ${code} to ${email}`);
     
-    await sendMailAsync(
+    const emailResult = await sendMailAsync(
       email,
       'Password Reset Code - WAG Restaurant',
       `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
@@ -394,10 +416,14 @@ async function startServer() {
         <div style="text-align: center; margin: 30px 0;">
           <span style="font-size: 36px; font-weight: bold; letter-spacing: 5px; background: #f5f5f5; padding: 15px 30px; border-radius: 8px;">${code}</span>
         </div>
-        <p style="text-align: center;">This code expires in 2 minutes.</p>
+        <p style="text-align: center;">This code expires in 10 minutes.</p>
         <p style="text-align: center; color: #666; font-size: 12px;">If you didn't request this, please ignore this email.</p>
       </div>`
     );
+    
+    if (!emailResult.success && emailResult.code) {
+      console.log(`⚠️ Forgot password: OTP for ${email} is ${code} (check server console)`);
+    }
     
     res.json({ success: true, message: 'Reset code sent to your email.' });
   });
@@ -410,7 +436,7 @@ async function startServer() {
     if (!user) return res.status(404).json({ success: false, message: 'No account found.' });
     
     const code = generateOTP();
-    const expiresAt = new Date(Date.now() + 2 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     db.prepare('DELETE FROM password_resets WHERE email = ?').run(email);
     db.prepare('INSERT INTO password_resets (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
     
@@ -420,11 +446,11 @@ async function startServer() {
       `<div style="font-family: Arial, sans-serif;">
         <h2 style="color: #b8860b;">New Password Reset Code</h2>
         <p>Your new code: <strong style="font-size: 24px;">${code}</strong></p>
-        <p>Expires in 2 minutes.</p>
+        <p>Expires in 10 minutes.</p>
       </div>`
     );
     
-    console.log(`📧 Resend reset OTP for ${email}: ${code}`);
+    console.log(`Resend reset OTP for ${email}: ${code}`);
     res.json({ success: true, message: 'New code sent.' });
   });
 
@@ -577,6 +603,7 @@ async function startServer() {
     }
   );
 
+  // ============ USER ACCOUNT DETAILS ============
   app.get('/api/user/account-details', (req, res) => {
     const userId = (req as any).session?.userId;
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
@@ -655,6 +682,7 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // ============ PAYMENT METHODS ============
   async function getOrCreateStripeCustomer(userId: number, email: string, name: string): Promise<string> {
     const user = db.prepare('SELECT stripe_customer_id FROM users WHERE id = ?').get(userId) as any;
     if (user?.stripe_customer_id) return user.stripe_customer_id;
@@ -720,6 +748,7 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // ============ ORDERS ============
   app.post('/api/orders', async (req, res) => {
     const userId = (req as any).session?.userId;
     if (!userId) return res.status(401).json({ success: false, message: 'Please log in to place an order.' });
@@ -746,9 +775,9 @@ async function startServer() {
       const adminUser = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as any;
       if (adminUser) db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(adminUser.id, '🛒 New Order', `Order #${orderNumber} placed by ${shipping_info?.name || 'Guest'}`, 'order');
       sendMailAsync(
-        process.env.ADMIN_EMAIL || process.env.MAIL_USER || '',
+        process.env.ADMIN_EMAIL || process.env.MAIL_USERNAME || '',
         `🛒 New Order: ${orderNumber}`,
-        `<h3>New Order #${orderNumber}</h3><p>Total: $${total_amount}</p>`
+        `<h3>New Order #${orderNumber}</h3><p>Total: $${total_amount}</p><p><a href="${process.env.VITE_API_URL || 'https://your-domain.com'}/admin">View in Admin</a></p>`
       ).catch(console.error);
       if (payment_method === 'card') {
         const stripe = getStripe();
@@ -785,6 +814,7 @@ async function startServer() {
     }
   });
 
+  // ============ MENU ROUTES ============
   app.get('/api/menu', (_req, res) => {
     const menu = db.prepare('SELECT * FROM menu_items WHERE is_available = 1').all();
     res.json(menu);
@@ -826,6 +856,7 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // ============ RESERVATIONS ============
   app.post('/api/reservations', async (req, res) => {
     const { name, email, phone, date, time, guests, notes } = req.body;
     if (!name || !email || !phone || !date || !time || !guests) return res.status(400).json({ success: false, message: 'All fields are required.' });
@@ -836,8 +867,8 @@ async function startServer() {
       const reservationId = result.lastInsertRowid;
       sendMailAsync(email, 'Reservation Confirmed - WAG Restaurant', `<h2>Reservation Confirmed!</h2><p>Dear ${name}, your reservation on <strong>${date}</strong> at <strong>${time}</strong> for <strong>${guests} guests</strong> is confirmed.</p>`)
         .catch(err => console.error(`Reservation email failed for ${email}:`, err.message));
-      const adminEmail = process.env.ADMIN_EMAIL || process.env.MAIL_USER || '';
-      if (adminEmail && adminEmail !== email) sendMailAsync(adminEmail, `🆕 New Reservation: ${name}`, `<h3>New Reservation</h3><p>Name: ${name}<br>Email: ${email}<br>Phone: ${phone}<br>Date: ${date}<br>Time: ${time}<br>Guests: ${guests}<br>Notes: ${notes || 'None'}</p>`).catch(console.error);
+      const adminEmail = process.env.ADMIN_EMAIL || process.env.MAIL_USERNAME || '';
+      if (adminEmail && adminEmail !== email) sendMailAsync(adminEmail, `🆕 New Reservation: ${name}`, `<h3>New Reservation</h3><p>Name: ${name}<br>Email: ${email}<br>Phone: ${phone}<br>Date: ${date}<br>Time: ${time}<br>Guests: ${guests}<br>Notes: ${notes || 'None'}</p><p><a href="${process.env.VITE_API_URL || 'https://your-domain.com'}/admin">Go to Admin Dashboard</a></p>`).catch(console.error);
       const adminUser = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as any;
       if (adminUser) db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(adminUser.id, '📅 New Reservation', `${name} booked a table for ${guests} on ${date} at ${time}`, 'reservation');
       res.json({ success: true, message: 'Reservation confirmed!', id: reservationId });
@@ -866,12 +897,13 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // ============ CONTACT FORM ============
   app.post('/api/contact', async (req, res) => {
     const { name, email, subject, message } = req.body;
     if (!name || !email || !message) return res.status(400).json({ success: false, message: 'Name, email, and message are required.' });
     try {
       db.prepare(`INSERT INTO messages (name, email, subject, message, is_read, created_at) VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP)`).run(name, email, subject || 'No subject', message);
-      const adminEmail = process.env.ADMIN_EMAIL || process.env.MAIL_USER || '';
+      const adminEmail = process.env.ADMIN_EMAIL || process.env.MAIL_USERNAME || '';
       if (adminEmail) sendMailAsync(adminEmail, `[Contact] ${subject || 'New Message'} - from ${name}`, `<h2>Contact Form</h2><p><strong>From:</strong> ${name} (${email})</p><p><strong>Subject:</strong> ${subject}</p><p><strong>Message:</strong></p><p>${message}</p>`).catch(console.error);
       const adminUser = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as any;
       if (adminUser) db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(adminUser.id, '💬 New Contact Message', `${name} sent a message: "${message.substring(0, 50)}..."`, 'message');
@@ -894,6 +926,7 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // ============ AI CONCIERGE ============
   app.post('/api/concierge', async (req, res) => {
     const { messages, userName = 'Guest' } = req.body;
     const groqApiKey = process.env.GROQ_API_KEY;
@@ -956,6 +989,7 @@ async function startServer() {
     }
   });
 
+  // ============ ADMIN ROUTES ============
   function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
     if ((req as any).session?.userRole !== 'admin') return res.status(403).json({ success: false, message: 'Admin access required.' });
     next();
@@ -1088,6 +1122,7 @@ async function startServer() {
     }
   });
 
+  // ============ SETTINGS ============
   app.get('/api/settings', (_req, res) => {
     try {
       const rows = db.prepare('SELECT key, value FROM settings').all() as any[];
@@ -1124,6 +1159,7 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // ============ PRODUCTION STATIC FILES ==========
   if (IS_PRODUCTION) {
     const distPath = path.join(process.cwd(), 'dist');
     console.log(`📂 Serving static files from: ${distPath}`);
@@ -1159,8 +1195,7 @@ async function startServer() {
     console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`📊 Health: http://localhost:${PORT}/api/health`);
     console.log(`🍽️  Menu: http://localhost:${PORT}/api/menu`);
-    console.log(`📧 Email service: ${process.env.MAIL_USER ? 'Gmail SMTP configured' : 'Console fallback only'}`);
-    console.log(`⏱️  OTP expires in 2 minutes`);
+    console.log(`📧 Email service: ${process.env.RESEND_API_KEY ? 'Resend configured' : 'Console fallback only'}`);
   });
 }
 

@@ -57,22 +57,22 @@ const Navbar = () => {
       <div className="w-full px-4 sm:px-6 lg:px-12">
         <div className="flex justify-between items-center h-20">
           <Link to="/" className="flex items-center space-x-2 group">
-            <div className="h-8 w-8 rounded-lg gold-gradient flex items-center justify-center shadow-lg">
+            <div className="h-8 w-8 rounded-lg gold-gradient flex items-center justify-center">
               <ChefHat className="h-5 w-5 text-primary-foreground" />
             </div>
             <span className="text-2xl font-bold text-primary tracking-tighter">{settings.restaurantName?.split(' ')[0] || 'WAG'}</span>
           </Link>
 
-          {/* Desktop Nav - clean, no yellow */}
+          {/* Desktop Nav - gold text animation on hover only */}
           <div className="hidden md:flex items-center space-x-2">
             {navLinks.map((link) => (
               <Link
                 key={link.path}
                 to={link.path}
-                className={`relative px-5 py-2 text-sm font-bold transition-all duration-150 rounded-xl focus:outline-none focus:ring-0 ${
+                className={`relative px-5 py-2 text-sm font-bold transition-all duration-300 rounded-xl focus:outline-none focus:ring-0 ${
                   location.pathname === link.path 
                     ? 'text-white after:absolute after:bottom-0 after:left-1/2 after:-translate-x-1/2 after:w-6 after:h-0.5 after:bg-gradient-to-r after:from-amber-500 after:to-amber-600 after:rounded-full' 
-                    : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    : 'text-gray-400 hover:text-transparent hover:bg-clip-text hover:bg-gradient-to-r hover:from-amber-400 hover:to-amber-600'
                 }`}
               >
                 {link.name}
@@ -109,7 +109,7 @@ const Navbar = () => {
                 </DropdownMenuTrigger>
                 
                 <DropdownMenuContent 
-                  className="w-72 bg-black/95 backdrop-blur-xl border border-white/10 shadow-2xl rounded-2xl"
+                  className="w-72 bg-black/95 backdrop-blur-xl border border-white/10 rounded-2xl"
                   align="end"
                   sideOffset={8}
                 >
@@ -198,7 +198,7 @@ const Navbar = () => {
         </div>
       </div>
 
-      {/* Mobile Nav - active link also white, no yellow */}
+      {/* Mobile Nav */}
       {isOpen && (
         <div className="md:hidden bg-black/95 backdrop-blur-3xl border-b border-white/10 overflow-hidden">
           <div className="px-4 pt-2 pb-8 space-y-1">
@@ -225,7 +225,7 @@ const Navbar = () => {
                 to={link.path}
                 onClick={() => setIsOpen(false)}
                 className={`block px-3 py-4 text-base font-bold focus:outline-none focus:ring-0 ${
-                  location.pathname === link.path ? 'text-white' : 'text-gray-400 hover:text-white'
+                  location.pathname === link.path ? 'text-white' : 'text-gray-400 hover:text-transparent hover:bg-clip-text hover:bg-gradient-to-r hover:from-amber-400 hover:to-amber-600'
                 }`}
               >
                 {link.name}

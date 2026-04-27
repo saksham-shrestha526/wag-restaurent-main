@@ -22,6 +22,13 @@ interface AuthContextType {
   checkAuth: () => Promise<boolean>;
 }
 
+// Define the response type from API
+interface ApiResponse<T = any> {
+  success: boolean;
+  user?: User;
+  message?: string;
+}
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -38,7 +45,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const checkAuth = useCallback(async (): Promise<boolean> => {
     try {
-      const data = await api.getMe();
+      const data = await api.getMe() as ApiResponse;
       if (data.success && data.user) {
         setUser(data.user);
         localStorage.setItem('wag_authed_user', JSON.stringify(data.user));
@@ -49,7 +56,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return false;
       }
     } catch (err: any) {
-      if (err.status !== 401) console.error('checkAuth error:', err);
+      // Handle 401 gracefully - don't log as error
+      if (err.status === 401) {
+        console.debug('Auth token expired or invalid (401)');
+      } else {
+        console.error('checkAuth error:', err);
+      }
       setUser(null);
       localStorage.removeItem('wag_authed_user');
       return false;
@@ -64,8 +76,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (loginInProgress.current) throw new Error('Login already in progress');
     loginInProgress.current = true;
     try {
-      const data = await api.login(email, password);
+      const data = await api.login(email, password) as ApiResponse;
       if (!data.success) throw new Error(data.message || 'Login failed');
+      if (!data.user) throw new Error('No user data returned');
       setUser(data.user);
       localStorage.setItem('wag_authed_user', JSON.stringify(data.user));
       return data.user;

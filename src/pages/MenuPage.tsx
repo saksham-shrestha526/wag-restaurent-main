@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, ShoppingCart, Info, RefreshCw } from 'lucide-react';
+import { Search, ShoppingCart, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,14 +8,6 @@ import { Badge } from '@/components/ui/badge';
 import { useCart } from '@/lib/cart-context';
 import { useSettings } from '@/lib/settings-context';
 import { toast } from 'sonner';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 
 interface MenuItem {
   id: number;
@@ -50,30 +42,32 @@ const MenuPage = () => {
   const symbol = currencySymbols[currency] || '$';
 
   useEffect(() => {
-    setLoading(true);
-    setError(null);
-    fetch('/api/menu')
-      .then(res => {
+    const fetchMenu = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch('/api/menu');
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        return res.json();
-      })
-      .then(data => {
+        const data = await res.json();
         setMenu(data);
         setFilteredMenu(data);
-      })
-      .catch(err => {
+      } catch (err) {
         console.error('Menu fetch error:', err);
-        setError(err.message);
+        setError(err instanceof Error ? err.message : 'Failed to load menu');
         toast.error('Failed to load menu. Please refresh or try again later.');
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchMenu();
   }, []);
 
   useEffect(() => {
     let result = menu;
     if (search) {
-      result = result.filter(item => 
-        item.name.toLowerCase().includes(search.toLowerCase()) || 
+      result = result.filter(item =>
+        item.name.toLowerCase().includes(search.toLowerCase()) ||
         item.description.toLowerCase().includes(search.toLowerCase())
       );
     }
@@ -143,7 +137,7 @@ const MenuPage = () => {
   }
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
@@ -158,8 +152,8 @@ const MenuPage = () => {
       <div className="flex flex-col md:flex-row gap-6 mb-12 items-center justify-between">
         <div className="relative w-full md:w-96">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input 
-            placeholder="Search dishes..." 
+          <Input
+            placeholder="Search dishes..."
             className="pl-10 bg-muted/50 border-white/10 focus:border-primary"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -198,9 +192,9 @@ const MenuPage = () => {
               >
                 <Card className="glass border-white/5 overflow-hidden group h-full flex flex-col">
                   <div className="relative h-56 overflow-hidden bg-gray-800">
-                    <img 
-                      src={item.image_url || 'https://picsum.photos/seed/food/400'} 
-                      alt={item.name} 
+                    <img
+                      src={item.image_url || 'https://picsum.photos/seed/food/400'}
+                      alt={item.name}
                       className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                       referrerPolicy="no-referrer"
                       onError={(e: any) => {
@@ -222,57 +216,13 @@ const MenuPage = () => {
                     </div>
                     <p className="text-sm text-muted-foreground line-clamp-2">{item.description}</p>
                   </CardHeader>
-                  <CardFooter className="mt-auto gap-2">
-                    <Button 
-                      className="flex-grow gold-gradient text-primary-foreground font-bold"
+                  <CardFooter className="mt-auto">
+                    <Button
+                      className="w-full grow gold-gradient text-primary-foreground font-bold"
                       onClick={() => handleAddToCart(item)}
                     >
-                      <ShoppingCart className="mr-2 h-4 w-4" /> Add to Cart
+                      <ShoppingCart className="mr-2 h-4 w-4" /> Add to Cart - {symbol}{item.price.toFixed(2)}
                     </Button>
-                    
-                    {/* Fixed DialogTrigger – no nested button */}
-                    <Dialog>
-                      <DialogTrigger asChild>
-                        <div className="cursor-pointer">
-                          <Button variant="outline" size="icon" className="border-white/10 pointer-events-none">
-                            <Info className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </DialogTrigger>
-                      <DialogContent className="glass border-white/10 max-w-2xl">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          <img 
-                            src={item.image_url || 'https://picsum.photos/seed/food/400'} 
-                            alt={item.name} 
-                            className="rounded-xl object-cover h-full w-full"
-                            referrerPolicy="no-referrer"
-                            onError={(e: any) => {
-                              e.target.src = 'https://picsum.photos/seed/food/400';
-                            }}
-                          />
-                          <div className="space-y-4">
-                            <DialogHeader>
-                              <DialogTitle className="text-3xl font-bold">{item.name}</DialogTitle>
-                              <DialogDescription className="text-primary text-xl font-bold">
-                                {symbol}{item.price.toFixed(2)}
-                              </DialogDescription>
-                            </DialogHeader>
-                            <p className="text-muted-foreground">{item.description}</p>
-                            <div className="flex flex-wrap gap-2">
-                              <Badge variant="outline" className="border-primary/30 text-primary">{item.category}</Badge>
-                              {getDietaryBadges(item).map((badge, idx) => (
-                                <Badge key={idx} variant="outline" className={badge.className.replace('bg-', 'border-').replace('/80', '/30') + ' bg-transparent'}>
-                                  {badge.label}
-                                </Badge>
-                              ))}
-                            </div>
-                            <Button className="w-full gold-gradient text-primary-foreground" onClick={() => handleAddToCart(item)}>
-                              Add to Order
-                            </Button>
-                          </div>
-                        </div>
-                      </DialogContent>
-                    </Dialog>
                   </CardFooter>
                 </Card>
               </motion.div>
