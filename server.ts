@@ -28,34 +28,20 @@ const SESSION_DB_FILENAME = 'sessions.sqlite';
 let transporter: nodemailer.Transporter | null = null;
 function getTransporter() {
   if (!transporter && process.env.MAIL_USER && process.env.MAIL_PASS) {
+    const port = parseInt(process.env.MAIL_PORT || '465');
+    const secure = process.env.MAIL_SECURE === 'true' || port === 465;
     transporter = nodemailer.createTransport({
       host: process.env.MAIL_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.MAIL_PORT || '587'),
-      secure: false,
+      port: port,
+      secure: secure,
       auth: {
         user: process.env.MAIL_USER,
         pass: process.env.MAIL_PASS,
       },
     });
-    console.log('📧 Gmail SMTP configured');
+    console.log('📧 Gmail SMTP configured on port', port);
   }
   return transporter;
-}
-
-async function verifyRecaptcha(token: string): Promise<boolean> {
-  const secret = process.env.RECAPTCHA_SECRET_KEY;
-  if (!secret) return true;
-  try {
-    const response = await fetch('https://www.google.com/recaptcha/api/siteverify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `secret=${secret}&response=${token}`,
-    });
-    const data = await response.json();
-    return data.success === true;
-  } catch {
-    return false;
-  }
 }
 
 const loginLimiter = rateLimit({
@@ -281,15 +267,11 @@ async function startServer() {
     }
   });
 
-  // ============ AUTH ROUTES WITH 2 MINUTE OTP ============
+  // ============ AUTH ROUTES WITH 2 MINUTE OTP (NO reCAPTCHA) ============
   app.post('/api/register', async (req, res) => {
-    const { name, email, password, phone = '', recaptchaToken } = req.body;
+    const { name, email, password, phone = '' } = req.body;
     if (!name || !email || !password) {
       return res.status(400).json({ success: false, message: 'Name, email, and password are required.' });
-    }
-    if (process.env.RECAPTCHA_SECRET_KEY && recaptchaToken) {
-      const isValid = await verifyRecaptcha(recaptchaToken);
-      if (!isValid) return res.status(400).json({ success: false, message: 'reCAPTCHA verification failed.' });
     }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
