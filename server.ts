@@ -7,7 +7,7 @@ import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import fs from 'fs';
 import Stripe from 'stripe';
-import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 
@@ -15,7 +15,7 @@ dotenv.config();
 
 import db, { DATA_DIR } from './src/lib/db';
 
-console.log('🔑 Env – GROQ:', !!process.env.GROQ_API_KEY, 'Resend:', !!process.env.RESEND_API_KEY);
+console.log('🔑 Env – GROQ:', !!process.env.GROQ_API_KEY, 'Gmail:', !!process.env.MAIL_USER);
 console.log('📁 DATA_DIR:', DATA_DIR);
 
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
@@ -23,6 +23,24 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const SESSION_DB_DIR = DATA_DIR;
 const SESSION_DB_FILENAME = 'sessions.sqlite';
+
+// Gmail Transporter
+let transporter: nodemailer.Transporter | null = null;
+function getTransporter() {
+  if (!transporter && process.env.MAIL_USER && process.env.MAIL_PASS) {
+    transporter = nodemailer.createTransport({
+      host: process.env.MAIL_HOST || 'smtp.gmail.com',
+      port: parseInt(process.env.MAIL_PORT || '587'),
+      secure: false,
+      auth: {
+        user: process.env.MAIL_USER,
+        pass: process.env.MAIL_PASS,
+      },
+    });
+    console.log('📧 Gmail SMTP configured');
+  }
+  return transporter;
+}
 
 async function verifyRecaptcha(token: string): Promise<boolean> {
   const secret = process.env.RECAPTCHA_SECRET_KEY;
@@ -54,13 +72,6 @@ function getStripe(): Stripe | null {
   return stripeClient;
 }
 
-let resendClient: Resend | null = null;
-function getResend(): Resend | null {
-  const key = process.env.RESEND_API_KEY;
-  if (!resendClient && key) resendClient = new Resend(key);
-  return resendClient;
-}
-
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
   filename: (_req, file, cb) => {
@@ -80,41 +91,36 @@ const upload = multer({
   },
 });
 
+// Email sending with Gmail + console fallback
 async function sendMailAsync(to: string, subject: string, html: string) {
-  const resend = getResend();
+  const mailTransporter = getTransporter();
   
   if (!to || !to.includes('@')) {
     console.error(`❌ Invalid email address: ${to}`);
     return { success: false, error: 'Invalid email address' };
   }
   
-  if (resend) {
+  if (mailTransporter) {
     try {
       console.log(`📧 Sending email to: ${to}`);
       console.log(`📧 Subject: ${subject}`);
       
-      const { data, error } = await resend.emails.send({
-        from: 'WAG Restaurant <onboarding@resend.dev>',
-        to: [to],
+      const info = await mailTransporter.sendMail({
+        from: `WAG Restaurant <${process.env.MAIL_USER}>`,
+        to: to,
         subject: subject,
         html: html,
       });
       
-      if (error) {
-        console.error(`❌ Resend error:`, error.message);
-        console.log(`🔑 OTP Code: ${extractCodeFromHtml(html)}`);
-        return { success: false, error: error.message, fallback: true, code: extractCodeFromHtml(html) };
-      }
-      
-      console.log(`✅ Email sent successfully to ${to} (id: ${data?.id})`);
-      return { success: true, id: data?.id };
+      console.log(`✅ Email sent successfully to ${to} (id: ${info.messageId})`);
+      return { success: true, id: info.messageId };
     } catch (err: any) {
-      console.error(`❌ Resend exception:`, err.message);
+      console.error(`❌ Gmail error:`, err.message);
       console.log(`🔑 OTP Code: ${extractCodeFromHtml(html)}`);
       return { success: false, error: err.message, fallback: true, code: extractCodeFromHtml(html) };
     }
   } else {
-    console.log('⚠️ Resend not configured. OTP will be logged to console.');
+    console.log('⚠️ Gmail not configured. OTP will be logged to console.');
     console.log(`🔑 OTP Code: ${extractCodeFromHtml(html)}`);
     return { success: false, fallback: true, code: extractCodeFromHtml(html) };
   }
@@ -125,7 +131,7 @@ function extractCodeFromHtml(html: string): string {
   return match ? match[1] : '000000';
 }
 
-console.log('📧 Email configured: Resend with console fallback');
+console.log('📧 Email configured: Gmail SMTP with console fallback');
 
 function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -144,6 +150,7 @@ const ALLOWED_ORIGINS = [
   'http://localhost:3001',
   'http://localhost:3010',
   'http://localhost:3011',
+  'https://wag-restaurent-main-production.up.railway.app',
   process.env.FRONTEND_URL,
   process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : undefined,
 ].filter(Boolean) as string[];
@@ -151,7 +158,7 @@ const ALLOWED_ORIGINS = [
 async function startServer() {
   console.log('🚀 Starting WAG server...');
   const app = express();
-  const PORT = process.env.PORT || 3011;
+  const PORT = process.env.PORT || 8080;
   const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
   app.set('trust proxy', 1);
@@ -757,9 +764,9 @@ async function startServer() {
       const adminUser = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as any;
       if (adminUser) db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(adminUser.id, '🛒 New Order', `Order #${orderNumber} placed by ${shipping_info?.name || 'Guest'}`, 'order');
       sendMailAsync(
-        process.env.ADMIN_EMAIL || process.env.MAIL_USERNAME || '',
+        process.env.ADMIN_EMAIL || process.env.MAIL_USER || '',
         `🛒 New Order: ${orderNumber}`,
-        `<h3>New Order #${orderNumber}</h3><p>Total: $${total_amount}</p><p><a href="${process.env.VITE_API_URL || 'https://your-domain.com'}/admin">View in Admin</a></p>`
+        `<h3>New Order #${orderNumber}</h3><p>Total: $${total_amount}</p>`
       ).catch(console.error);
       if (payment_method === 'card') {
         const stripe = getStripe();
@@ -847,8 +854,8 @@ async function startServer() {
       const reservationId = result.lastInsertRowid;
       sendMailAsync(email, 'Reservation Confirmed - WAG Restaurant', `<h2>Reservation Confirmed!</h2><p>Dear ${name}, your reservation on <strong>${date}</strong> at <strong>${time}</strong> for <strong>${guests} guests</strong> is confirmed.</p>`)
         .catch(err => console.error(`Reservation email failed for ${email}:`, err.message));
-      const adminEmail = process.env.ADMIN_EMAIL || process.env.MAIL_USERNAME || '';
-      if (adminEmail && adminEmail !== email) sendMailAsync(adminEmail, `🆕 New Reservation: ${name}`, `<h3>New Reservation</h3><p>Name: ${name}<br>Email: ${email}<br>Phone: ${phone}<br>Date: ${date}<br>Time: ${time}<br>Guests: ${guests}<br>Notes: ${notes || 'None'}</p><p><a href="${process.env.VITE_API_URL || 'https://your-domain.com'}/admin">Go to Admin Dashboard</a></p>`).catch(console.error);
+      const adminEmail = process.env.ADMIN_EMAIL || process.env.MAIL_USER || '';
+      if (adminEmail && adminEmail !== email) sendMailAsync(adminEmail, `🆕 New Reservation: ${name}`, `<h3>New Reservation</h3><p>Name: ${name}<br>Email: ${email}<br>Phone: ${phone}<br>Date: ${date}<br>Time: ${time}<br>Guests: ${guests}<br>Notes: ${notes || 'None'}</p>`).catch(console.error);
       const adminUser = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as any;
       if (adminUser) db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(adminUser.id, '📅 New Reservation', `${name} booked a table for ${guests} on ${date} at ${time}`, 'reservation');
       res.json({ success: true, message: 'Reservation confirmed!', id: reservationId });
@@ -882,7 +889,7 @@ async function startServer() {
     if (!name || !email || !message) return res.status(400).json({ success: false, message: 'Name, email, and message are required.' });
     try {
       db.prepare(`INSERT INTO messages (name, email, subject, message, is_read, created_at) VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP)`).run(name, email, subject || 'No subject', message);
-      const adminEmail = process.env.ADMIN_EMAIL || process.env.MAIL_USERNAME || '';
+      const adminEmail = process.env.ADMIN_EMAIL || process.env.MAIL_USER || '';
       if (adminEmail) sendMailAsync(adminEmail, `[Contact] ${subject || 'New Message'} - from ${name}`, `<h2>Contact Form</h2><p><strong>From:</strong> ${name} (${email})</p><p><strong>Subject:</strong> ${subject}</p><p><strong>Message:</strong></p><p>${message}</p>`).catch(console.error);
       const adminUser = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as any;
       if (adminUser) db.prepare('INSERT INTO user_notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)').run(adminUser.id, '💬 New Contact Message', `${name} sent a message: "${message.substring(0, 50)}..."`, 'message');
@@ -1170,7 +1177,7 @@ async function startServer() {
     console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`📊 Health: http://localhost:${PORT}/api/health`);
     console.log(`🍽️  Menu: http://localhost:${PORT}/api/menu`);
-    console.log(`📧 Email service: ${process.env.RESEND_API_KEY ? 'Resend configured' : 'Console fallback only'}`);
+    console.log(`📧 Email service: ${process.env.MAIL_USER ? 'Gmail SMTP configured' : 'Console fallback only'}`);
     console.log(`⏱️  OTP expires in 2 minutes`);
   });
 }
