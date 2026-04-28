@@ -97,7 +97,7 @@ async function sendMailAsync(to: string, subject: string, html: string) {
       
       // ✅ CHANGED: Using your verified domain instead of onboarding@resend.dev
       const { data, error } = await resend.emails.send({
-        from: 'WAG Luxury Dining <onboarding@resend.dev>',
+        from: 'WAG Luxury Dining <noreply@saksham-shrestha.com.np>',
         to: [to],
         subject: subject,
         html: html,
