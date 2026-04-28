@@ -80,7 +80,6 @@ const upload = multer({
   },
 });
 
-// ============ FIXED EMAIL SENDING WITH YOUR VERIFIED DOMAIN ============
 async function sendMailAsync(to: string, subject: string, html: string) {
   const resend = getResend();
   
@@ -918,12 +917,17 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ AI CONCIERGE - CAN ANSWER ANYTHING LIKE CHATGPT ============
+  // ============ AI CONCIERGE - FULLY FIXED ============
   app.post('/api/concierge', async (req, res) => {
     const { messages, userName = 'Guest' } = req.body;
     const groqApiKey = process.env.GROQ_API_KEY;
     const lastUserMessage = Array.isArray(messages) ? messages.filter((m: any) => m.role === 'user').pop()?.content || '' : '';
     
+    if (!lastUserMessage) {
+      return res.json({ reply: "👋 Hello! How can I help you today?" });
+    }
+    
+    // Fetch restaurant data
     const settingsRows = db.prepare('SELECT key, value FROM settings').all() as any[];
     const settings: Record<string, string> = {};
     settingsRows.forEach(row => { settings[row.key] = row.value; });
@@ -951,7 +955,14 @@ async function startServer() {
     const vegItems = menuItems.filter(m => m.is_veg === 1);
     const spicyItems = menuItems.filter(m => m.is_spicy === 1);
     
+    // Format menu for API context
+    const menuContext = menuItems.map(m => 
+      `- ${m.name} (${m.category}): ${m.description} - रु ${m.price}${m.is_veg ? ' [Veg]' : ' [Non-Veg]'}${m.is_spicy ? ' [Spicy]' : ''}`
+    ).join('\n');
+    
+    // If no API key, use fallback
     if (!groqApiKey) {
+      console.log('⚠️ No GROQ API key, using fallback responses');
       const msg = lastUserMessage.toLowerCase();
       let reply = "";
       
@@ -1004,22 +1015,6 @@ ${spicyItems.map(item => `  • ${item.name} - रु ${item.price}
 🔥 Want me to recommend something milder?`;
         }
       }
-      else if (msg.includes('price') || msg.includes('cost') || msg.includes('how much')) {
-        const priceMatch = msg.match(/(\d+)/);
-        const maxPrice = priceMatch ? parseInt(priceMatch[1]) : 200;
-        const cheapItems = menuItems.filter(m => m.price <= maxPrice).sort((a,b) => a.price - b.price);
-        
-        if (cheapItems.length === 0) {
-          reply = `💰 Our dishes start at रु ${Math.min(...menuItems.map(m => m.price))}. Want to see options under a different budget?`;
-        } else {
-          reply = `💰 Value Picks (Under रु ${maxPrice})
-        
-${cheapItems.map(item => `  • ${item.name} - रु ${item.price}
-    ${item.description}`).join('\n\n')}
-
-Great choices at amazing prices! ✨`;
-        }
-      }
       else if (msg.includes('phone') || msg.includes('call') || msg.includes('contact')) {
         reply = `📞 Contact ${restaurantName}
       
@@ -1046,7 +1041,7 @@ ${address}
 🗺️ Easily accessible by taxi, free parking available. Would you like directions?`;
       }
       else if (msg.includes('motivate') || msg.includes('inspire') || msg.includes('encourage')) {
-        reply = `✨ **You've got this, ${userName}!** ✨
+        reply = `✨ You've got this, ${userName}! ✨
 
 Remember: Every expert was once a beginner. Every success story started with a single step.
 
@@ -1055,13 +1050,13 @@ Keep going - you're doing better than you think! 🌟
 What goal are you working toward today?`;
       }
       else if (msg.includes('joke') || msg.includes('funny')) {
-        reply = `😄 **Here's a joke for you!**
+        reply = `😄 Here's a joke for you!
 
 Why don't scientists trust atoms?
 
 Because they make up everything! 🧪
 
-Want another? Just say "tell me another joke"! 🎭`;
+Want another? Just say tell me another joke! 🎭`;
       }
       else if (msg.includes('thank')) {
         reply = `You're very welcome, ${userName}! 🌟 It's my pleasure. Is there anything else I can help with?`;
@@ -1088,159 +1083,64 @@ What would you like to talk about today? 😊`;
       return res.json({ reply });
     }
     
+    // Use Groq API with timeout
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      
       const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { Authorization: `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'mixtral-8x7b-32768',
+          model: 'llama-3.3-70b-versatile',
           messages: [
             { 
               role: 'system', 
-              content: `You are ${restaurantName}'s AI assistant. You are friendly, warm, and helpful.
+              content: `You are ${restaurantName}'s friendly AI assistant. Use this restaurant data:
 
-IMPORTANT: You can answer ANY question - restaurant-related OR general topics like ChatGPT.
+RESTAURANT: ${restaurantName}
+PHONE: ${phone}
+EMAIL: ${email}
+ADDRESS: ${address}
+HOURS: ${hours}
 
-RESTAURANT DATA (use this when relevant):
-- Name: ${restaurantName}
-- Phone: ${phone}
-- Email: ${email}
-- Address: ${address}
-- Hours: ${hours}
+MENU:
+${menuContext}
 
-MENU ITEMS:
-${menuItems.map(m => `- ${m.name} (${m.category}): ${m.description} - रु ${m.price}`).join('\n')}
-
-FORMATTING RULES:
-- NEVER use ** or any markdown bold
-- Use double line breaks between sections
-- Use • for bullet points with spaces
-- Use emojis: 🍽️ 🌱 🌶️ 💰 ✨ 📞 🕐 📍 😄 🌟
-- Be conversational and warm
-- For typos/misspellings: understand what the user meant
-- For general topics: respond helpfully like ChatGPT
-- Keep responses concise but informative
-
-Be a friendly, helpful AI that knows about this restaurant AND can chat about anything!`
+RULES:
+- Answer ANY question naturally
+- Use emojis like 🍽️ 🌱 🌶️ 💰 📞 🕐 📍
+- Use bullet points with spaces
+- NO markdown bold (**)
+- Be warm and helpful
+- If asked about non-restaurant topics, respond helpfully`
             },
             { role: 'user', content: lastUserMessage }
           ],
           temperature: 0.8,
-          max_tokens: 1000,
+          max_tokens: 800,
         }),
+        signal: controller.signal
       });
       
-      const data = await response.json();
-      let reply = data.choices?.[0]?.message?.content || `✨ I'm having trouble right now. Please call ${phone} for assistance.`;
+      clearTimeout(timeoutId);
       
+      const data = await response.json();
+      
+      if (data.error) {
+        console.error('Groq API error:', data.error);
+        const fallback = `✨ I'm having trouble connecting right now. Please try again or call ${phone} for assistance.`;
+        return res.json({ reply: cleanResponse(fallback) });
+      }
+      
+      let reply = data.choices?.[0]?.message?.content || `✨ I'm here to help! What would you like to know about ${restaurantName}?`;
       reply = cleanResponse(reply);
       res.json({ reply });
+      
     } catch (err: any) {
-      console.error('Groq error:', err);
-      const fallbackReply = cleanResponse(`🔧 Technical Difficulty
-
-I'm having trouble connecting right now.
-
-📞 Please call ${phone} for assistance.
-
-💡 You can also browse our menu directly or make a reservation online.
-
-Sorry for the inconvenience! ✨`);
-      res.json({ reply: fallbackReply });
-    }
-  });
-
-  app.get('/api/chat', (req, res) => {
-    const userId = (req as any).session?.userId;
-    if (!userId) return res.json([]);
-    const history = db.prepare('SELECT role, content FROM chat_history WHERE user_id = ? ORDER BY created_at ASC LIMIT 100').all(userId);
-    res.json(history);
-  });
-
-  app.post('/api/chat/history', (req, res) => {
-    const userId = (req as any).session?.userId || null;
-    const { role, content } = req.body;
-    if (!role || !content) return res.status(400).json({ success: false });
-    db.prepare('INSERT INTO chat_history (user_id, role, content) VALUES (?, ?, ?)').run(userId, role, content);
-    res.json({ success: true });
-  });
-
-  app.post('/api/newsletter', (req, res) => {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ success: false, message: 'Email is required.' });
-    try {
-      db.prepare('INSERT INTO newsletter (email) VALUES (?)').run(email);
-      res.json({ success: true, message: 'Subscribed successfully!' });
-    } catch (err: any) {
-      if (err.message?.includes('UNIQUE')) return res.status(400).json({ success: false, message: 'Already subscribed.' });
-      res.status(500).json({ success: false, message: 'Failed to subscribe.' });
-    }
-  });
-
-  function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
-    if ((req as any).session?.userRole !== 'admin') return res.status(403).json({ success: false, message: 'Admin access required.' });
-    next();
-  }
-
-  app.post('/api/admin/seed-menu', requireAdmin, (req, res) => {
-    const items = [
-      ['Chicken Momo', 'Steamed dumplings with spicy sauce', 180, 'Appetizer', 0, 1, 'https://picsum.photos/seed/momo/400/300'],
-      ['Buff Momo', 'Juicy buff dumplings with achar', 200, 'Appetizer', 0, 1, 'https://picsum.photos/seed/momo2/400/300'],
-      ['Veg Momo', 'Soft vegetable dumplings', 150, 'Appetizer', 1, 0, 'https://picsum.photos/seed/vegmomo/400/300'],
-      ['Chatpate', 'Spicy puffed rice snack', 100, 'Appetizer', 1, 1, 'https://picsum.photos/seed/chatpate/400/300'],
-      ['Dal Bhat Set', 'Rice, dal, vegetables and pickle', 350, 'Main Course', 1, 0, 'https://picsum.photos/seed/dalbhat/400/300'],
-      ['Chicken Chowmein', 'Fried noodles with chicken', 220, 'Main Course', 0, 0, 'https://picsum.photos/seed/chowmein/400/300'],
-      ['Thakali Khana Set', 'Traditional Nepali thali', 450, 'Main Course', 0, 0, 'https://picsum.photos/seed/thakali/400/300'],
-      ['Buff Sukuti', 'Dry spicy buffalo meat', 480, 'Main Course', 0, 1, 'https://picsum.photos/seed/sukuti/400/300'],
-      ['Juju Dhau', 'Sweet creamy yogurt', 150, 'Dessert', 1, 0, 'https://picsum.photos/seed/juju/400/300'],
-      ['Kheer', 'Rice pudding with milk', 120, 'Dessert', 1, 0, 'https://picsum.photos/seed/kheer/400/300'],
-      ['Sel Roti', 'Sweet rice bread', 180, 'Dessert', 1, 0, 'https://picsum.photos/seed/selroti/400/300'],
-      ['Ice Cream', 'Cold sweet dessert', 100, 'Dessert', 1, 0, 'https://picsum.photos/seed/icecream/400/300'],
-      ['Masala Tea', 'Hot milk tea with spices', 50, 'Drinks', 1, 0, 'https://picsum.photos/seed/tea/400/300'],
-      ['Lassi', 'Sweet yogurt drink', 120, 'Drinks', 1, 0, 'https://picsum.photos/seed/lassi/400/300'],
-      ['Lemon Soda', 'Fresh lemon with soda', 100, 'Drinks', 1, 0, 'https://picsum.photos/seed/soda/400/300'],
-      ['Cold Drink', 'Chilled soft drink', 90, 'Drinks', 1, 0, 'https://picsum.photos/seed/coke/400/300']
-    ];
-    try {
-      db.prepare('DELETE FROM menu_items').run();
-      const insert = db.prepare(`INSERT INTO menu_items (name, description, price, category, is_veg, is_spicy, image_url, is_available) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`);
-      for (const item of items) insert.run(...item);
-      res.json({ success: true, message: 'Menu seeded with 16 Nepali items' });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get('/api/admin/stats', requireAdmin, (req, res) => {
-    try {
-      const userCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as any)?.count || 0;
-      const orderCount = (db.prepare('SELECT COUNT(*) as count FROM orders').get() as any)?.count || 0;
-      const reservationCount = (db.prepare('SELECT COUNT(*) as count FROM reservations').get() as any)?.count || 0;
-      const menuCount = (db.prepare('SELECT COUNT(*) as count FROM menu_items').get() as any)?.count || 0;
-      const revenue = (db.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total FROM orders WHERE payment_status = 'paid'`).get() as any)?.total || 0;
-      res.json({ users: userCount, orders: orderCount, reservations: reservationCount, menuItems: menuCount, revenue });
-    } catch (err) {
-      console.error('Stats error:', err);
-      res.status(500).json({ message: 'Failed to fetch stats.' });
-    }
-  });
-
-  app.get('/api/admin/orders', requireAdmin, (_req, res) => {
-    try {
-      const orders = db
-        .prepare(
-          `SELECT o.*, u.name as customer_name, u.email as customer_email, u.phone as customer_phone
-           FROM orders o JOIN users u ON o.user_id = u.id
-           ORDER BY o.created_at DESC`
-        )
-        .all() as any[];
-      for (const order of orders) order.items = db
-        .prepare('SELECT mi.name, oi.quantity, oi.price FROM order_items oi JOIN menu_items mi ON oi.menu_item_id = mi.id WHERE oi.order_id = ?')
-        .all(order.id);
-      res.json(orders);
-    } catch (err) {
-      console.error('Admin orders error:', err);
-      res.status(500).json({ message: 'Failed to fetch orders.' });
+      console.error('Groq fetch error:', err.message);
+      const fallback = `✨ I'm having a quick technical moment. Please try again or call ${phone} for assistance.`;
+      res.json({ reply: cleanResponse(fallback) });
     }
   });
 
@@ -1473,7 +1373,7 @@ Sorry for the inconvenience! ✨`);
     console.log(`✅ Server running on http://0.0.0.0:${PORT}`);
     console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`📊 Health: http://localhost:${PORT}/api/health`);
-    console.log(`🍽️  Menu: http://localhost:${PORT}/api/menu`);
+    console.log(`🍽️ Menu: http://localhost:${PORT}/api/menu`);
     console.log(`📧 Email service: ${process.env.RESEND_API_KEY ? 'Resend configured' : 'Console fallback only'}`);
   });
 }
@@ -1481,4 +1381,4 @@ Sorry for the inconvenience! ✨`);
 startServer().catch((err) => {
   console.error('💥 Failed to start server:', err);
   process.exit(1);
-});
+});      
