@@ -84,7 +84,6 @@ const upload = multer({
 async function sendMailAsync(to: string, subject: string, html: string) {
   const resend = getResend();
   
-  // Validate email
   if (!to || !to.includes('@')) {
     console.error(`❌ Invalid email address: ${to}`);
     return { success: false, error: 'Invalid email address' };
@@ -95,7 +94,6 @@ async function sendMailAsync(to: string, subject: string, html: string) {
       console.log(`📧 Sending email to: ${to}`);
       console.log(`📧 Subject: ${subject}`);
       
-      // ✅ CHANGED: Using your verified domain instead of onboarding@resend.dev
       const { data, error } = await resend.emails.send({
         from: 'WAG Luxury Dining <noreply@saksham-shrestha.com.np>',
         to: [to],
@@ -137,7 +135,6 @@ function generateOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// Clean up expired OTPs every minute
 setInterval(() => {
   try {
     db.prepare(`DELETE FROM email_verifications WHERE expires_at < datetime('now')`).run();
@@ -155,6 +152,17 @@ const ALLOWED_ORIGINS = [
   process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : undefined,
 ].filter(Boolean) as string[];
 
+function cleanResponse(text: string): string {
+  return text
+    .replace(/\*\*/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[•\-]\s*/g, '  • ')
+    .replace(/([.!?])\s+/g, '$1\n\n')
+    .replace(/^\s+|\s+$/g, '')
+    .replace(/::/g, ':')
+    .replace(/\n\n\n/g, '\n\n');
+}
+
 async function startServer() {
   console.log('🚀 Starting WAG server...');
   const app = express();
@@ -163,7 +171,6 @@ async function startServer() {
 
   app.set('trust proxy', 1);
 
-  // Stripe webhook (raw body)
   app.post('/api/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
     const sig = req.headers['stripe-signature'] as string;
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -282,7 +289,7 @@ async function startServer() {
     }
   });
 
-  // ============ FIXED AUTH ROUTES WITH BETTER OTP LOGGING ============
+  // ============ AUTH ROUTES ============
   app.post('/api/register', async (req, res) => {
     const { name, email, password, phone = '', recaptchaToken } = req.body;
     if (!name || !email || !password) {
@@ -328,7 +335,7 @@ async function startServer() {
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     db.prepare('INSERT INTO email_verifications (email, code, expires_at) VALUES (?, ?, ?)').run(email, code, expiresAt);
 
-    const emailResult = await sendMailAsync(
+    await sendMailAsync(
       email,
       'Verify your email - WAG Luxury Dining',
       `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
@@ -341,10 +348,6 @@ async function startServer() {
         <p style="text-align: center; color: #666; font-size: 12px;">If you didn't request this, please ignore this email.</p>
       </div>`
     );
-
-    if (!emailResult.success && emailResult.code) {
-      console.log(`⚠️ Registration: OTP for ${email} is ${code}`);
-    }
 
     res.json({ success: true, message: 'Verification code sent to your email.', email });
   });
@@ -386,7 +389,6 @@ async function startServer() {
     res.json({ success: true, message: 'Email verified! You can now log in.' });
   });
 
-  // ============ FIXED PASSWORD RESET ROUTES ============
   app.post('/api/forgot-password', async (req, res) => {
     const { email } = req.body;
     console.log(`🔐 Forgot password request for: ${email}`);
@@ -407,7 +409,7 @@ async function startServer() {
     
     console.log(`📧 Sending password reset OTP ${code} to ${email}`);
     
-    const emailResult = await sendMailAsync(
+    await sendMailAsync(
       email,
       'Password Reset Code - WAG Restaurant',
       `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
@@ -420,10 +422,6 @@ async function startServer() {
         <p style="text-align: center; color: #666; font-size: 12px;">If you didn't request this, please ignore this email.</p>
       </div>`
     );
-    
-    if (!emailResult.success && emailResult.code) {
-      console.log(`⚠️ Forgot password: OTP for ${email} is ${code} (check server console)`);
-    }
     
     res.json({ success: true, message: 'Reset code sent to your email.' });
   });
@@ -603,7 +601,6 @@ async function startServer() {
     }
   );
 
-  // ============ USER ACCOUNT DETAILS ============
   app.get('/api/user/account-details', (req, res) => {
     const userId = (req as any).session?.userId;
     if (!userId) return res.status(401).json({ message: 'Unauthorized' });
@@ -682,7 +679,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ PAYMENT METHODS ============
   async function getOrCreateStripeCustomer(userId: number, email: string, name: string): Promise<string> {
     const user = db.prepare('SELECT stripe_customer_id FROM users WHERE id = ?').get(userId) as any;
     if (user?.stripe_customer_id) return user.stripe_customer_id;
@@ -748,7 +744,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ ORDERS ============
   app.post('/api/orders', async (req, res) => {
     const userId = (req as any).session?.userId;
     if (!userId) return res.status(401).json({ success: false, message: 'Please log in to place an order.' });
@@ -814,7 +809,6 @@ async function startServer() {
     }
   });
 
-  // ============ MENU ROUTES ============
   app.get('/api/menu', (_req, res) => {
     const menu = db.prepare('SELECT * FROM menu_items WHERE is_available = 1').all();
     res.json(menu);
@@ -856,7 +850,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ RESERVATIONS ============
   app.post('/api/reservations', async (req, res) => {
     const { name, email, phone, date, time, guests, notes } = req.body;
     if (!name || !email || !phone || !date || !time || !guests) return res.status(400).json({ success: false, message: 'All fields are required.' });
@@ -897,7 +890,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ CONTACT FORM ============
   app.post('/api/contact', async (req, res) => {
     const { name, email, subject, message } = req.body;
     if (!name || !email || !message) return res.status(400).json({ success: false, message: 'Name, email, and message are required.' });
@@ -926,39 +918,235 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ AI CONCIERGE ============
+  // ============ AI CONCIERGE - CAN ANSWER ANYTHING LIKE CHATGPT ============
   app.post('/api/concierge', async (req, res) => {
     const { messages, userName = 'Guest' } = req.body;
     const groqApiKey = process.env.GROQ_API_KEY;
     const lastUserMessage = Array.isArray(messages) ? messages.filter((m: any) => m.role === 'user').pop()?.content || '' : '';
+    
+    const settingsRows = db.prepare('SELECT key, value FROM settings').all() as any[];
+    const settings: Record<string, string> = {};
+    settingsRows.forEach(row => { settings[row.key] = row.value; });
+    
+    const menuItems = db.prepare('SELECT id, name, description, price, category, is_veg, is_spicy FROM menu_items WHERE is_available = 1').all() as any[];
+    
+    const restaurantName = settings.restaurant_name || 'WAG Restaurant';
+    const phone = settings.phone || '+977 1 4235678';
+    const email = settings.email || 'info@wag.com.np';
+    const address = settings.address || 'Lazimpat, Kathmandu';
+    const hours = settings.opening_hours || '5:00 PM - 11:00 PM';
+    
+    const categories = [...new Set(menuItems.map(m => m.category))];
+    let menuFormatted = '';
+    for (const cat of categories) {
+      const items = menuItems.filter(m => m.category === cat);
+      menuFormatted += `\n\n📁 ${cat}\n`;
+      items.forEach(item => {
+        const vegIcon = item.is_veg === 1 ? '🌱 ' : '🍖 ';
+        const spicyIcon = item.is_spicy === 1 ? '🌶️ ' : '';
+        menuFormatted += `\n  • ${vegIcon}${spicyIcon}${item.name} - रु ${item.price}\n    ${item.description}\n`;
+      });
+    }
+    
+    const vegItems = menuItems.filter(m => m.is_veg === 1);
+    const spicyItems = menuItems.filter(m => m.is_spicy === 1);
+    
     if (!groqApiKey) {
       const msg = lastUserMessage.toLowerCase();
-      let reply = "Welcome to WAG! How can I assist you today?";
-      if (msg.includes('menu')) reply = "Our menu features Wagyu steak, truffle pasta, saffron risotto, and more.";
-      else if (msg.includes('reserv')) reply = "You can book a table on our Reservations page.";
-      else if (msg.includes('hour')) reply = "We're open daily 5 PM – 11 PM.";
+      let reply = "";
+      
+      if (msg.match(/^(hi|hello|hey|yo|sup|namaste|hola)$/)) {
+        reply = `✨ Namaste ${userName}! Welcome to ${restaurantName}.
+
+I'm your AI concierge. I can help with restaurant questions AND general chat!
+
+Restaurant Info:
+  • Menu and prices
+  • Vegetarian and spicy options
+  • Hours and location
+  • Reservations and contact
+
+General Chat:
+  • Motivation and inspiration
+  • Jokes and fun facts
+  • Life advice
+  • Answer any question
+
+What would you like to know today? 🍽️`;
+      }
+      else if (msg.includes('menu') || msg.includes('what do you have')) {
+        reply = `🍽️ ${restaurantName} - Complete Menu
+${menuFormatted}
+
+What looks good to you? ✨`;
+      }
+      else if (msg.includes('veg') || msg.includes('vegetarian')) {
+        if (vegItems.length === 0) {
+          reply = `🌱 We have several delicious vegetarian dishes. Ask me to show you all veg items!`;
+        } else {
+          reply = `🌱 Vegetarian Delights at ${restaurantName}
+        
+${vegItems.map(item => `  • ${item.name} - रु ${item.price}
+    ${item.description}`).join('\n\n')}
+
+Would you like to know more about any dish? 🥗`;
+        }
+      }
+      else if (msg.includes('spicy')) {
+        if (spicyItems.length === 0) {
+          reply = `🌶️ We can adjust spice levels for most dishes. Just let us know your preference!`;
+        } else {
+          reply = `🌶️ Spicy Selections
+        
+${spicyItems.map(item => `  • ${item.name} - रु ${item.price}
+    ${item.description}`).join('\n\n')}
+
+🔥 Want me to recommend something milder?`;
+        }
+      }
+      else if (msg.includes('price') || msg.includes('cost') || msg.includes('how much')) {
+        const priceMatch = msg.match(/(\d+)/);
+        const maxPrice = priceMatch ? parseInt(priceMatch[1]) : 200;
+        const cheapItems = menuItems.filter(m => m.price <= maxPrice).sort((a,b) => a.price - b.price);
+        
+        if (cheapItems.length === 0) {
+          reply = `💰 Our dishes start at रु ${Math.min(...menuItems.map(m => m.price))}. Want to see options under a different budget?`;
+        } else {
+          reply = `💰 Value Picks (Under रु ${maxPrice})
+        
+${cheapItems.map(item => `  • ${item.name} - रु ${item.price}
+    ${item.description}`).join('\n\n')}
+
+Great choices at amazing prices! ✨`;
+        }
+      }
+      else if (msg.includes('phone') || msg.includes('call') || msg.includes('contact')) {
+        reply = `📞 Contact ${restaurantName}
+      
+  • Phone: ${phone}
+  • Email: ${email}
+  • Address: ${address}
+  • Hours: ${hours}
+
+Would you like to make a reservation? 📅`;
+      }
+      else if (msg.includes('hour') || msg.includes('open') || msg.includes('timing')) {
+        reply = `🕐 ${restaurantName} - Opening Hours
+      
+${hours}
+
+📍 Last order: 30 minutes before closing. Open every day!
+Would you like to book a table? 📅`;
+      }
+      else if (msg.includes('address') || msg.includes('location') || msg.includes('where')) {
+        reply = `📍 ${restaurantName} Location
+      
+${address}
+
+🗺️ Easily accessible by taxi, free parking available. Would you like directions?`;
+      }
+      else if (msg.includes('motivate') || msg.includes('inspire') || msg.includes('encourage')) {
+        reply = `✨ **You've got this, ${userName}!** ✨
+
+Remember: Every expert was once a beginner. Every success story started with a single step.
+
+Keep going - you're doing better than you think! 🌟
+
+What goal are you working toward today?`;
+      }
+      else if (msg.includes('joke') || msg.includes('funny')) {
+        reply = `😄 **Here's a joke for you!**
+
+Why don't scientists trust atoms?
+
+Because they make up everything! 🧪
+
+Want another? Just say "tell me another joke"! 🎭`;
+      }
+      else if (msg.includes('thank')) {
+        reply = `You're very welcome, ${userName}! 🌟 It's my pleasure. Is there anything else I can help with?`;
+      }
+      else if (msg.includes('how are you')) {
+        reply = `🤖 I'm doing great, ${userName}! Thanks for asking.
+
+I'm your AI concierge, always ready to help with restaurant info or just chat.
+
+What's on your mind today? 😊`;
+      }
+      else {
+        reply = `👋 Hey ${userName}! I'm your AI assistant.
+
+I can help with:
+  🍽️ Restaurant menu, prices, hours, location
+  💬 Motivation, jokes, or general chat
+  📞 Contact info and reservations
+
+What would you like to talk about today? 😊`;
+      }
+      
+      reply = cleanResponse(reply);
       return res.json({ reply });
     }
+    
     try {
       const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { Authorization: `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model: 'mixtral-8x7b-32768',
           messages: [
-            { role: 'system', content: 'You are a helpful AI concierge for WAG Luxury Dining restaurant in Kathmandu, Nepal. Help guests with menu questions, reservations, hours (5 PM–11 PM daily), and general inquiries. Be warm and professional. Keep answers concise.' },
-            { role: 'user', content: lastUserMessage },
+            { 
+              role: 'system', 
+              content: `You are ${restaurantName}'s AI assistant. You are friendly, warm, and helpful.
+
+IMPORTANT: You can answer ANY question - restaurant-related OR general topics like ChatGPT.
+
+RESTAURANT DATA (use this when relevant):
+- Name: ${restaurantName}
+- Phone: ${phone}
+- Email: ${email}
+- Address: ${address}
+- Hours: ${hours}
+
+MENU ITEMS:
+${menuItems.map(m => `- ${m.name} (${m.category}): ${m.description} - रु ${m.price}`).join('\n')}
+
+FORMATTING RULES:
+- NEVER use ** or any markdown bold
+- Use double line breaks between sections
+- Use • for bullet points with spaces
+- Use emojis: 🍽️ 🌱 🌶️ 💰 ✨ 📞 🕐 📍 😄 🌟
+- Be conversational and warm
+- For typos/misspellings: understand what the user meant
+- For general topics: respond helpfully like ChatGPT
+- Keep responses concise but informative
+
+Be a friendly, helpful AI that knows about this restaurant AND can chat about anything!`
+            },
+            { role: 'user', content: lastUserMessage }
           ],
-          temperature: 0.7,
-          max_tokens: 500,
+          temperature: 0.8,
+          max_tokens: 1000,
         }),
       });
+      
       const data = await response.json();
-      const reply = data.choices?.[0]?.message?.content || "I'm having trouble right now. Please call +977 1 4235678.";
+      let reply = data.choices?.[0]?.message?.content || `✨ I'm having trouble right now. Please call ${phone} for assistance.`;
+      
+      reply = cleanResponse(reply);
       res.json({ reply });
     } catch (err: any) {
       console.error('Groq error:', err);
-      res.json({ reply: "I'm having technical difficulties. Please call us at +977 1 4235678." });
+      const fallbackReply = cleanResponse(`🔧 Technical Difficulty
+
+I'm having trouble connecting right now.
+
+📞 Please call ${phone} for assistance.
+
+💡 You can also browse our menu directly or make a reservation online.
+
+Sorry for the inconvenience! ✨`);
+      res.json({ reply: fallbackReply });
     }
   });
 
@@ -989,7 +1177,100 @@ async function startServer() {
     }
   });
 
-  // ============ ADMIN ROUTES ============
+  function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+    if ((req as any).session?.userRole !== 'admin') return res.status(403).json({ success: false, message: 'Admin access required.' });
+    next();
+  }
+
+  app.post('/api/admin/seed-menu', requireAdmin, (req, res) => {
+    const items = [
+      ['Chicken Momo', 'Steamed dumplings with spicy sauce', 180, 'Appetizer', 0, 1, 'https://picsum.photos/seed/momo/400/300'],
+      ['Buff Momo', 'Juicy buff dumplings with achar', 200, 'Appetizer', 0, 1, 'https://picsum.photos/seed/momo2/400/300'],
+      ['Veg Momo', 'Soft vegetable dumplings', 150, 'Appetizer', 1, 0, 'https://picsum.photos/seed/vegmomo/400/300'],
+      ['Chatpate', 'Spicy puffed rice snack', 100, 'Appetizer', 1, 1, 'https://picsum.photos/seed/chatpate/400/300'],
+      ['Dal Bhat Set', 'Rice, dal, vegetables and pickle', 350, 'Main Course', 1, 0, 'https://picsum.photos/seed/dalbhat/400/300'],
+      ['Chicken Chowmein', 'Fried noodles with chicken', 220, 'Main Course', 0, 0, 'https://picsum.photos/seed/chowmein/400/300'],
+      ['Thakali Khana Set', 'Traditional Nepali thali', 450, 'Main Course', 0, 0, 'https://picsum.photos/seed/thakali/400/300'],
+      ['Buff Sukuti', 'Dry spicy buffalo meat', 480, 'Main Course', 0, 1, 'https://picsum.photos/seed/sukuti/400/300'],
+      ['Juju Dhau', 'Sweet creamy yogurt', 150, 'Dessert', 1, 0, 'https://picsum.photos/seed/juju/400/300'],
+      ['Kheer', 'Rice pudding with milk', 120, 'Dessert', 1, 0, 'https://picsum.photos/seed/kheer/400/300'],
+      ['Sel Roti', 'Sweet rice bread', 180, 'Dessert', 1, 0, 'https://picsum.photos/seed/selroti/400/300'],
+      ['Ice Cream', 'Cold sweet dessert', 100, 'Dessert', 1, 0, 'https://picsum.photos/seed/icecream/400/300'],
+      ['Masala Tea', 'Hot milk tea with spices', 50, 'Drinks', 1, 0, 'https://picsum.photos/seed/tea/400/300'],
+      ['Lassi', 'Sweet yogurt drink', 120, 'Drinks', 1, 0, 'https://picsum.photos/seed/lassi/400/300'],
+      ['Lemon Soda', 'Fresh lemon with soda', 100, 'Drinks', 1, 0, 'https://picsum.photos/seed/soda/400/300'],
+      ['Cold Drink', 'Chilled soft drink', 90, 'Drinks', 1, 0, 'https://picsum.photos/seed/coke/400/300']
+    ];
+    try {
+      db.prepare('DELETE FROM menu_items').run();
+      const insert = db.prepare(`INSERT INTO menu_items (name, description, price, category, is_veg, is_spicy, image_url, is_available) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`);
+      for (const item of items) insert.run(...item);
+      res.json({ success: true, message: 'Menu seeded with 16 Nepali items' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/admin/stats', requireAdmin, (req, res) => {
+    try {
+      const userCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as any)?.count || 0;
+      const orderCount = (db.prepare('SELECT COUNT(*) as count FROM orders').get() as any)?.count || 0;
+      const reservationCount = (db.prepare('SELECT COUNT(*) as count FROM reservations').get() as any)?.count || 0;
+      const menuCount = (db.prepare('SELECT COUNT(*) as count FROM menu_items').get() as any)?.count || 0;
+      const revenue = (db.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total FROM orders WHERE payment_status = 'paid'`).get() as any)?.total || 0;
+      res.json({ users: userCount, orders: orderCount, reservations: reservationCount, menuItems: menuCount, revenue });
+    } catch (err) {
+      console.error('Stats error:', err);
+      res.status(500).json({ message: 'Failed to fetch stats.' });
+    }
+  });
+
+  app.get('/api/admin/orders', requireAdmin, (_req, res) => {
+    try {
+      const orders = db
+        .prepare(
+          `SELECT o.*, u.name as customer_name, u.email as customer_email, u.phone as customer_phone
+           FROM orders o JOIN users u ON o.user_id = u.id
+           ORDER BY o.created_at DESC`
+        )
+        .all() as any[];
+      for (const order of orders) order.items = db
+        .prepare('SELECT mi.name, oi.quantity, oi.price FROM order_items oi JOIN menu_items mi ON oi.menu_item_id = mi.id WHERE oi.order_id = ?')
+        .all(order.id);
+      res.json(orders);
+    } catch (err) {
+      console.error('Admin orders error:', err);
+      res.status(500).json({ message: 'Failed to fetch orders.' });
+    }
+  });
+
+  app.get('/api/chat', (req, res) => {
+    const userId = (req as any).session?.userId;
+    if (!userId) return res.json([]);
+    const history = db.prepare('SELECT role, content FROM chat_history WHERE user_id = ? ORDER BY created_at ASC LIMIT 100').all(userId);
+    res.json(history);
+  });
+
+  app.post('/api/chat/history', (req, res) => {
+    const userId = (req as any).session?.userId || null;
+    const { role, content } = req.body;
+    if (!role || !content) return res.status(400).json({ success: false });
+    db.prepare('INSERT INTO chat_history (user_id, role, content) VALUES (?, ?, ?)').run(userId, role, content);
+    res.json({ success: true });
+  });
+
+  app.post('/api/newsletter', (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ success: false, message: 'Email is required.' });
+    try {
+      db.prepare('INSERT INTO newsletter (email) VALUES (?)').run(email);
+      res.json({ success: true, message: 'Subscribed successfully!' });
+    } catch (err: any) {
+      if (err.message?.includes('UNIQUE')) return res.status(400).json({ success: false, message: 'Already subscribed.' });
+      res.status(500).json({ success: false, message: 'Failed to subscribe.' });
+    }
+  });
+
   function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
     if ((req as any).session?.userRole !== 'admin') return res.status(403).json({ success: false, message: 'Admin access required.' });
     next();
@@ -1122,7 +1403,6 @@ async function startServer() {
     }
   });
 
-  // ============ SETTINGS ============
   app.get('/api/settings', (_req, res) => {
     try {
       const rows = db.prepare('SELECT key, value FROM settings').all() as any[];
@@ -1159,7 +1439,6 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  // ============ PRODUCTION STATIC FILES ==========
   if (IS_PRODUCTION) {
     const distPath = path.join(process.cwd(), 'dist');
     console.log(`📂 Serving static files from: ${distPath}`);
